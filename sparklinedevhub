@@ -70,9 +70,9 @@ Instance.new("UICorner",button).CornerRadius = UDim.new(0,10)
 
 local moving = false
 local stopDistance = 3
-local speed = 45
+local speed = 26
 local vertical = 30
-local flyHeight = 25
+local flyHeight = 20
 
 local char
 local hrp
