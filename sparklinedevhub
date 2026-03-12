@@ -1,234 +1,208 @@
+------------------------------------------------
+-- ARBIX HUB Client Persistent GUI with Stop Feature
+------------------------------------------------
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
-local UIS = game:GetService("UserInputService")
-local Lighting = game:GetService("Lighting")
-
 local player = Players.LocalPlayer
 
-------------------------------------------------
--- KEY SYSTEM
-------------------------------------------------
+local moving = false
+local char, hrp
+local gui, flyButton
 
-local correctKey = "arbix hub"
-
-local blur = Instance.new("BlurEffect")
-blur.Size = 20
-blur.Parent = Lighting
-
-local keyGui = Instance.new("ScreenGui",player.PlayerGui)
-
-local keyFrame = Instance.new("Frame",keyGui)
-keyFrame.Size = UDim2.new(0,420,0,230)
-keyFrame.Position = UDim2.new(0.5,0,0.5,0)
-keyFrame.AnchorPoint = Vector2.new(0.5,0.5)
-keyFrame.BackgroundColor3 = Color3.fromRGB(18,18,25)
-
-Instance.new("UICorner",keyFrame).CornerRadius = UDim.new(0,14)
-
-local grad = Instance.new("UIGradient",keyFrame)
-grad.Color = ColorSequence.new{
-	ColorSequenceKeypoint.new(0,Color3.fromRGB(30,30,45)),
-	ColorSequenceKeypoint.new(1,Color3.fromRGB(15,15,25))
+local config = {
+    speed = 30,
+    vertical = 32,
+    flyHeight = 24,
+    stopDistance = 3,
+    correctKey = "arbix hub"
 }
 
-local title = Instance.new("TextLabel",keyFrame)
-title.Size = UDim2.new(1,0,0,50)
-title.BackgroundTransparency = 1
-title.Text = "Arbix Hub"
-title.Font = Enum.Font.GothamBlack
-title.TextSize = 28
-title.TextColor3 = Color3.new(1,1,1)
-
-local box = Instance.new("TextBox",keyFrame)
-box.Size = UDim2.new(0.8,0,0,50)
-box.Position = UDim2.new(0.1,0,0.4,0)
-box.PlaceholderText = "Enter Key"
-box.Text = ""
-box.Font = Enum.Font.Gotham
-box.TextSize = 20
-box.TextColor3 = Color3.new(1,1,1)
-box.BackgroundColor3 = Color3.fromRGB(35,35,45)
-
-Instance.new("UICorner",box).CornerRadius = UDim.new(0,10)
-
-local button = Instance.new("TextButton",keyFrame)
-button.Size = UDim2.new(0.8,0,0,45)
-button.Position = UDim2.new(0.1,0,0.7,0)
-button.Text = "Unlock"
-button.Font = Enum.Font.GothamBold
-button.TextSize = 20
-button.TextColor3 = Color3.new(1,1,1)
-button.BackgroundColor3 = Color3.fromRGB(0,120,255)
-
-Instance.new("UICorner",button).CornerRadius = UDim.new(0,10)
-
-------------------------------------------------
--- DELIVERY SYSTEM
-------------------------------------------------
-
-local moving = false
-local stopDistance = 3
-local speed = 29
-local vertical = 34
-local flyHeight = 24
-
-local char
-local hrp
-
+-- Character setup
 local function SetupCharacter(c)
-	char = c
-	hrp = char:WaitForChild("HumanoidRootPart")
+    char = c
+    hrp = char:WaitForChild("HumanoidRootPart")
 end
 
 if player.Character then
-	SetupCharacter(player.Character)
+    SetupCharacter(player.Character)
 end
-
 player.CharacterAdded:Connect(SetupCharacter)
 
-local function FindDelivery()
-
-	local plots = Workspace:FindFirstChild("Plots")
-	if not plots then return end
-
-	for _,plot in pairs(plots:GetChildren()) do
-
-		local sign = plot:FindFirstChild("PlotSign")
-
-		if sign then
-			local yourBase = sign:FindFirstChild("YourBase")
-
-			if yourBase and yourBase.Enabled then
-				return plot:FindFirstChild("DeliveryHitbox")
-			end
-		end
-	end
+-- Find Steal target
+local function FindTarget()
+    local plots = Workspace:FindFirstChild("Plots")
+    if not plots then return end
+    for _, plot in pairs(plots:GetChildren()) do
+        local sign = plot:FindFirstChild("PlotSign")
+        if sign then
+            local yourBase = sign:FindFirstChild("YourBase")
+            if yourBase and yourBase.Enabled then
+                return plot:FindFirstChild("DeliveryHitbox")
+            end
+        end
+    end
 end
 
-local function MoveToTarget(target,button,status)
+-- Fly/move system
+local function MoveToTarget(target)
+    if not hrp or not target then return end
+    moving = true
+    flyButton.Text = "Stop" -- Change button text when moving
+    local targetHeight = hrp.Position.Y + config.flyHeight
 
-	moving = true
-	button.Text = "STOP"
-	status.Text = "Moving..."
+    while moving and target.Parent do
+        local dir = target.Position - hrp.Position
+        local dist = dir.Magnitude
+        if dist <= config.stopDistance then break end
+        local horizontal = Vector3.new(dir.X,0,dir.Z).Unit * config.speed
+        local y = hrp.Position.Y < targetHeight and config.vertical or 0
+        hrp.AssemblyLinearVelocity = Vector3.new(horizontal.X, y, horizontal.Z)
+        task.wait(0.03)
+    end
 
-	local targetHeight = hrp.Position.Y + flyHeight
-
-	while moving and target and target.Parent do
-
-		local dir = target.Position - hrp.Position
-		local dist = dir.Magnitude
-
-		if dist <= stopDistance then break end
-
-		local horizontal = Vector3.new(dir.X,0,dir.Z).Unit * speed
-
-		local y = 0
-		if hrp.Position.Y < targetHeight then
-			y = vertical
-		end
-
-		local vel = Vector3.new(horizontal.X,y,horizontal.Z)
-
-		hrp.AssemblyLinearVelocity = vel
-
-		RunService.Heartbeat:Wait()
-
-	end
-
-	hrp.AssemblyLinearVelocity = Vector3.zero
-
-	button.Text = "TP TO DELIVERY BOX"
-	status.Text = "Finished"
-
-	moving = false
-
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    moving = false
+    if flyButton then
+        flyButton.Text = "Fly to Steal" -- Restore button text after stopping
+    end
 end
 
-------------------------------------------------
--- MAIN GUI
-------------------------------------------------
-
-local function OpenMain()
-
-	local gui = Instance.new("ScreenGui",player.PlayerGui)
-
-	local frame = Instance.new("Frame",gui)
-	frame.Size = UDim2.new(0,460,0,270)
-	frame.Position = UDim2.new(0.5,0,0.5,0)
-	frame.AnchorPoint = Vector2.new(0.5,0.5)
-	frame.BackgroundColor3 = Color3.fromRGB(18,18,25)
-	frame.Active = true
-	frame.Draggable = true
-
-	Instance.new("UICorner",frame).CornerRadius = UDim.new(0,14)
-
-	local title = Instance.new("TextLabel",frame)
-	title.Size = UDim2.new(1,0,0,40)
-	title.BackgroundTransparency = 1
-	title.Text = "Arbix Hub"
-	title.Font = Enum.Font.GothamBlack
-	title.TextSize = 22
-	title.TextColor3 = Color3.new(1,1,1)
-
-	local deliver = Instance.new("TextButton",frame)
-	deliver.Size = UDim2.new(0.8,0,0,50)
-	deliver.Position = UDim2.new(0.1,0,0.35,0)
-	deliver.Text = "TP TO DELIVERY BOX"
-	deliver.Font = Enum.Font.GothamBold
-	deliver.TextSize = 18
-	deliver.BackgroundColor3 = Color3.fromRGB(0,120,255)
-	deliver.TextColor3 = Color3.new(1,1,1)
-
-	Instance.new("UICorner",deliver).CornerRadius = UDim.new(0,12)
-
-	local status = Instance.new("TextLabel",frame)
-	status.Size = UDim2.new(1,0,0,30)
-	status.Position = UDim2.new(0,0,0.75,0)
-	status.BackgroundTransparency = 1
-	status.Text = "Idle"
-	status.Font = Enum.Font.Gotham
-	status.TextSize = 16
-	status.TextColor3 = Color3.new(1,1,1)
-
-	deliver.MouseButton1Click:Connect(function()
-
-		if moving then
-			moving = false
-			deliver.Text = "TP TO DELIVERY BOX"
-			status.Text = "Stopped"
-			return
-		end
-
-		local target = FindDelivery()
-
-		if target then
-			MoveToTarget(target,deliver,status)
-		end
-
-	end)
-
+-- Draggable GUI
+local function MakeDraggable(frame)
+    local dragging = false
+    local dragInput, dragStart, startPos
+    local function update(input)
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(
+            startPos.X.Scale, startPos.X.Offset + delta.X,
+            startPos.Y.Scale, startPos.Y.Offset + delta.Y
+        )
+    end
+    frame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    frame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement then
+            dragInput = input
+        end
+    end)
+    RunService.RenderStepped:Connect(function()
+        if dragging and dragInput then
+            update(dragInput)
+        end
+    end)
 end
 
-------------------------------------------------
--- KEY CHECK
-------------------------------------------------
+-- Create Main GUI (Persistent)
+local function CreateMainGUI(existingGUI)
+    gui = existingGUI or Instance.new("ScreenGui")
+    if not existingGUI then
+        gui.Name = "ARBIX_HUB_GUI"
+        gui.ResetOnSpawn = false
+        gui.Parent = player:WaitForChild("PlayerGui")
+    end
 
-button.MouseButton1Click:Connect(function()
+    -- Main frame
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0,250,0,120)
+    frame.Position = UDim2.new(0.5,0,0.5,0)
+    frame.AnchorPoint = Vector2.new(0.5,0.5)
+    frame.BackgroundColor3 = Color3.fromRGB(20,20,30)
+    frame.BackgroundTransparency = 0.1
+    frame.Parent = gui
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0,10)
+    MakeDraggable(frame)
 
-	if string.lower(box.Text) == correctKey then
+    -- Title
+    local title = Instance.new("TextLabel")
+    title.Size = UDim2.new(1,0,0,30)
+    title.Position = UDim2.new(0,0,0,0)
+    title.BackgroundTransparency = 1
+    title.Text = "ARBIX HUB العربي"
+    title.Font = Enum.Font.GothamBlack
+    title.TextSize = 20
+    title.TextColor3 = Color3.new(1,1,1)
+    title.Parent = frame
 
-		blur:Destroy()
-		keyGui:Destroy()
+    -- Fly Button
+    flyButton = Instance.new("TextButton")
+    flyButton.Size = UDim2.new(0.8,0,0,30)
+    flyButton.Position = UDim2.new(0.1,0,0.4,0)
+    flyButton.Text = "Fly to Steal"
+    flyButton.Font = Enum.Font.GothamBold
+    flyButton.TextSize = 16
+    flyButton.BackgroundColor3 = Color3.fromRGB(0,120,255)
+    flyButton.TextColor3 = Color3.new(1,1,1)
+    flyButton.Parent = frame
+    Instance.new("UICorner", flyButton).CornerRadius = UDim.new(0,8)
 
-		OpenMain()
+    flyButton.MouseButton1Click:Connect(function()
+        if moving then
+            moving = false -- Stop the current fly
+            return
+        end
+        local target = FindTarget()
+        if target then
+            MoveToTarget(target)
+        end
+    end)
 
-	else
+    -- Close Button
+    local close = Instance.new("TextButton")
+    close.Size = UDim2.new(0.1,0,0.3,0)
+    close.Position = UDim2.new(0.9,0,0,0)
+    close.Text = "X"
+    close.Font = Enum.Font.GothamBold
+    close.TextSize = 16
+    close.TextColor3 = Color3.new(1,1,1)
+    close.BackgroundColor3 = Color3.fromRGB(200,50,50)
+    close.Parent = frame
+    Instance.new("UICorner", close).CornerRadius = UDim.new(0,5)
+    close.MouseButton1Click:Connect(function()
+        gui:Destroy()
+    end)
+end
 
-		box.Text = ""
-		box.PlaceholderText = "Wrong Key"
-
-	end
-
+-- Handle respawn: preserve GUI
+player.CharacterAdded:Connect(function(c)
+    char = c
+    hrp = char:WaitForChild("HumanoidRootPart")
+    if gui then
+        -- GUI already exists, just reconnect flyButton events
+        for _, frame in pairs(gui:GetChildren()) do
+            if frame:IsA("Frame") then
+                local button = frame:FindFirstChildWhichIsA("TextButton")
+                if button then
+                    flyButton = button
+                    flyButton.MouseButton1Click:Connect(function()
+                        if moving then
+                            moving = false
+                            return
+                        end
+                        local target = FindTarget()
+                        if target then
+                            MoveToTarget(target)
+                        end
+                    end)
+                end
+            end
+        end
+    else
+        CreateMainGUI()
+    end
 end)
+
+-- Initialize first time
+if not gui then
+    CreateMainGUI()
+end
