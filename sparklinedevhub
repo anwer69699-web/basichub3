@@ -1,6 +1,3 @@
-------------------------------------------------
--- ARBIX HUB Client Persistent GUI with Stop Feature
-------------------------------------------------
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
@@ -18,7 +15,6 @@ local config = {
     correctKey = "arbix hub"
 }
 
--- Character setup
 local function SetupCharacter(c)
     char = c
     hrp = char:WaitForChild("HumanoidRootPart")
@@ -29,7 +25,6 @@ if player.Character then
 end
 player.CharacterAdded:Connect(SetupCharacter)
 
--- Find Steal target
 local function FindTarget()
     local plots = Workspace:FindFirstChild("Plots")
     if not plots then return end
@@ -44,11 +39,10 @@ local function FindTarget()
     end
 end
 
--- Fly/move system
 local function MoveToTarget(target)
     if not hrp or not target then return end
     moving = true
-    flyButton.Text = "Stop" -- Change button text when moving
+    flyButton.Text = "Stop"
     local targetHeight = hrp.Position.Y + config.flyHeight
 
     while moving and target.Parent do
@@ -64,11 +58,10 @@ local function MoveToTarget(target)
     hrp.AssemblyLinearVelocity = Vector3.zero
     moving = false
     if flyButton then
-        flyButton.Text = "Fly to Steal" -- Restore button text after stopping
+        flyButton.Text = "Fly to Steal"
     end
 end
 
--- Draggable GUI
 local function MakeDraggable(frame)
     local dragging = false
     local dragInput, dragStart, startPos
@@ -103,7 +96,6 @@ local function MakeDraggable(frame)
     end)
 end
 
--- Create Main GUI (Persistent)
 local function CreateMainGUI(existingGUI)
     gui = existingGUI or Instance.new("ScreenGui")
     if not existingGUI then
@@ -112,7 +104,6 @@ local function CreateMainGUI(existingGUI)
         gui.Parent = player:WaitForChild("PlayerGui")
     end
 
-    -- Main frame
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(0,250,0,120)
     frame.Position = UDim2.new(0.5,0,0.5,0)
@@ -123,7 +114,6 @@ local function CreateMainGUI(existingGUI)
     Instance.new("UICorner", frame).CornerRadius = UDim.new(0,10)
     MakeDraggable(frame)
 
-    -- Title
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1,0,0,30)
     title.Position = UDim2.new(0,0,0,0)
@@ -134,7 +124,6 @@ local function CreateMainGUI(existingGUI)
     title.TextColor3 = Color3.new(1,1,1)
     title.Parent = frame
 
-    -- Fly Button
     flyButton = Instance.new("TextButton")
     flyButton.Size = UDim2.new(0.8,0,0,30)
     flyButton.Position = UDim2.new(0.1,0,0.4,0)
@@ -148,7 +137,7 @@ local function CreateMainGUI(existingGUI)
 
     flyButton.MouseButton1Click:Connect(function()
         if moving then
-            moving = false -- Stop the current fly
+            moving = false
             return
         end
         local target = FindTarget()
@@ -157,7 +146,6 @@ local function CreateMainGUI(existingGUI)
         end
     end)
 
-    -- Close Button
     local close = Instance.new("TextButton")
     close.Size = UDim2.new(0.1,0,0.3,0)
     close.Position = UDim2.new(0.9,0,0,0)
@@ -173,12 +161,71 @@ local function CreateMainGUI(existingGUI)
     end)
 end
 
--- Handle respawn: preserve GUI
+local function ShowKeySystem()
+    local keyGUI = Instance.new("ScreenGui")
+    keyGUI.Name = "ARBIX_HUB_Key"
+    keyGUI.Parent = player:WaitForChild("PlayerGui")
+
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0,250,0,120)
+    frame.Position = UDim2.new(0.5,0,0.5,0)
+    frame.AnchorPoint = Vector2.new(0.5,0.5)
+    frame.BackgroundColor3 = Color3.fromRGB(20,20,30)
+    frame.BackgroundTransparency = 0.1
+    frame.Parent = keyGUI
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0,10)
+    MakeDraggable(frame)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1,0,0,30)
+    label.Position = UDim2.new(0,0,0,10)
+    label.BackgroundTransparency = 1
+    label.Text = "ادخل مفتاح ARBIX HUB"
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 16
+    label.TextColor3 = Color3.new(1,1,1)
+    label.Parent = frame
+
+    local textbox = Instance.new("TextBox")
+    textbox.Size = UDim2.new(0.8,0,0,30)
+    textbox.Position = UDim2.new(0.1,0,0.4,0)
+    textbox.PlaceholderText = "مفتاحك هنا"
+    textbox.Text = ""
+    textbox.Font = Enum.Font.Gotham
+    textbox.TextSize = 16
+    textbox.BackgroundColor3 = Color3.fromRGB(50,50,50)
+    textbox.TextColor3 = Color3.new(1,1,1)
+    textbox.Parent = frame
+    Instance.new("UICorner", textbox).CornerRadius = UDim.new(0,5)
+
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(0.8,0,0,30)
+    button.Position = UDim2.new(0.1,0,0.7,0)
+    button.Text = "تحقق"
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 16
+    button.BackgroundColor3 = Color3.fromRGB(0,120,255)
+    button.TextColor3 = Color3.new(1,1,1)
+    button.Parent = frame
+    Instance.new("UICorner", button).CornerRadius = UDim.new(0,5)
+
+    button.MouseButton1Click:Connect(function()
+        if textbox.Text == config.correctKey then
+            keyGUI:Destroy()
+            CreateMainGUI()
+        else
+            textbox.Text = ""
+            textbox.PlaceholderText = "المفتاح خطأ!"
+        end
+    end)
+end
+
+ShowKeySystem()
+
 player.CharacterAdded:Connect(function(c)
     char = c
     hrp = char:WaitForChild("HumanoidRootPart")
     if gui then
-        -- GUI already exists, just reconnect flyButton events
         for _, frame in pairs(gui:GetChildren()) do
             if frame:IsA("Frame") then
                 local button = frame:FindFirstChildWhichIsA("TextButton")
@@ -197,12 +244,5 @@ player.CharacterAdded:Connect(function(c)
                 end
             end
         end
-    else
-        CreateMainGUI()
     end
 end)
-
--- Initialize first time
-if not gui then
-    CreateMainGUI()
-end
