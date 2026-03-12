@@ -8,36 +8,84 @@ local char = player.Character or player.CharacterAdded:Wait()
 local humanoid = char:WaitForChild("Humanoid")
 local hrp = char:WaitForChild("HumanoidRootPart")
 
-------------------------------------------------
--- Settings
-------------------------------------------------
+-- ======================================
+-- الإعدادات الأساسية
+-- ======================================
 local moving = false
 local stopDistance = 3
 
 local fixedSpeed = 30
 local verticalSpeed = 60
-local hoverTime = 2.5      -- مدة التعليق في السماء
-local hoverHeight = 35     -- ارتفاع الطيران
+local hoverHeight = 35
+local hoverTime = 2.5
 
 local normalSpeed = humanoid.WalkSpeed
 
-------------------------------------------------
--- Anti Fall Protection
-------------------------------------------------
+-- ======================================
+-- أنظمة الحماية
+-- ======================================
 local bodyVelocity = Instance.new("BodyVelocity")
-bodyVelocity.MaxForce = Vector3.new(999999,999999,999999)
-bodyVelocity.Velocity = Vector3.zero
+bodyVelocity.MaxForce = Vector3.new(1e5,1e5,1e5)
+bodyVelocity.Velocity = Vector3.new(0,0,0)
 bodyVelocity.Parent = hrp
 
 local bodyGyro = Instance.new("BodyGyro")
-bodyGyro.MaxTorque = Vector3.new(999999,999999,999999)
-bodyGyro.P = 10000
+bodyGyro.MaxTorque = Vector3.new(1e6,1e6,1e6)
+bodyGyro.P = 1e4
 bodyGyro.CFrame = hrp.CFrame
 bodyGyro.Parent = hrp
 
-------------------------------------------------
--- Jump System (Double Jump)
-------------------------------------------------
+-- 1. Anti-Fall Protection (قوة تصحيح فيزيائية للحفاظ على الطيران)
+local function antiFall()
+	bodyVelocity.Velocity = Vector3.new(0,10,0)
+end
+
+-- 2. Anti-Stuck Protection: إعادة محاولة الحركة لو توقف الحركة
+local lastPos = hrp.Position
+local stuckTimer = 0
+local stuckThreshold = 2 -- ثانيتين
+
+local function checkStuck()
+	if (hrp.Position - lastPos).Magnitude < 0.1 then
+		stuckTimer = stuckTimer + RunService.Heartbeat:Wait()
+		if stuckTimer > stuckThreshold then
+			return true
+		end
+	else
+		stuckTimer = 0
+	end
+	lastPos = hrp.Position
+	return false
+end
+
+-- 3. Auto Stabilize: تثبيت وضعية الشخصية
+local function stabilize(targetPos)
+	bodyGyro.CFrame = CFrame.new(hrp.Position, targetPos)
+end
+
+-- 4. Speed Reset: إعادة سرعة المشي كل نصف ثانية
+spawn(function()
+	while true do
+		if moving then
+			humanoid.WalkSpeed = normalSpeed
+		end
+		wait(0.5)
+	end
+end)
+
+-- 5. Emergency Reset: إعادة تعيين الشخصية لو بقي معلق لفترة طويلة
+local hoverMaxTime = 6 -- ثواني
+local hoverStart = 0
+
+local function emergencyReset()
+	if tick() - hoverStart > hoverMaxTime then
+		char:BreakJoints() -- إعادة توليد الشخصية
+	end
+end
+
+-- ======================================
+-- نظام القفز المزدوج
+-- ======================================
 local jumpCount = 0
 local maxJumps = 2
 
@@ -54,9 +102,9 @@ UIS.JumpRequest:Connect(function()
 	end
 end)
 
-------------------------------------------------
--- Find Delivery
-------------------------------------------------
+-- ======================================
+-- البحث عن DeliveryBox
+-- ======================================
 local function FindDelivery()
 	local plots = Workspace:FindFirstChild("Plots")
 	if not plots then return end
@@ -72,76 +120,83 @@ local function FindDelivery()
 	end
 end
 
-------------------------------------------------
--- Hover Function
-------------------------------------------------
+-- ======================================
+-- التعليق في الهواء لفترة معينة مع الحماية
+-- ======================================
 local function hoverInAir()
-	local start = tick()
-
-	while tick() - start < hoverTime and moving do
-		bodyVelocity.Velocity = Vector3.new(0,10,0)
+	hoverStart = tick()
+	while tick() - hoverStart < hoverTime and moving do
+		antiFall()
 		RunService.Heartbeat:Wait()
+		emergencyReset()
 	end
 end
 
-------------------------------------------------
--- Move System (Protected Fly)
-------------------------------------------------
+-- ======================================
+-- حركة اللاعب مع الحماية المتقدمة
+-- ======================================
 local function moveToTarget(target, button)
-
 	moving = true
 	button.Text = "STOP"
-
+	
 	local targetY = hrp.Position.Y + hoverHeight
-
+	
 	while moving and target and target.Parent do
+		
+		if checkStuck() then
+			-- إعادة محاولة الحركة لو تعطل
+			hrp.CFrame = hrp.CFrame * CFrame.new(0, 0.1, 0)
+		end
 		
 		local direction = target.Position - hrp.Position
 		local distance = direction.Magnitude
 		
-		if distance <= stopDistance then
-			break
-		end
-
+		if distance <= stopDistance then break end
+		
 		local horizontal = Vector3.new(direction.X,0,direction.Z).Unit * fixedSpeed
 		
 		local yVelocity = 0
 		if hrp.Position.Y < targetY then
 			yVelocity = verticalSpeed
 		end
-
-		local velocity = Vector3.new(horizontal.X,yVelocity,horizontal.Z)
-
+		
+		local velocity = Vector3.new(horizontal.X, yVelocity, horizontal.Z)
+		
 		bodyVelocity.Velocity = velocity
-		bodyGyro.CFrame = CFrame.new(hrp.Position, target.Position)
-
+		stabilize(target.Position)
+		
 		RunService.Heartbeat:Wait()
 	end
-
+	
 	hoverInAir()
-
-	bodyVelocity.Velocity = Vector3.zero
+	
+	bodyVelocity.Velocity = Vector3.new(0,0,0)
+	bodyVelocity.Parent = nil
+	bodyGyro.Parent = nil
+	
+	humanoid:ChangeState(Enum.HumanoidStateType.Running)
+	humanoid.WalkSpeed = normalSpeed
+	
 	moving = false
 	button.Text = "DELIVER"
-
 end
 
-------------------------------------------------
--- GUI
-------------------------------------------------
-local gui = Instance.new("ScreenGui",player.PlayerGui)
+-- ======================================
+-- إنشاء الواجهة الرسومية
+-- ======================================
+local gui = Instance.new("ScreenGui", player.PlayerGui)
 gui.ResetOnSpawn = false
 
-local frame = Instance.new("Frame",gui)
+local frame = Instance.new("Frame", gui)
 frame.Size = UDim2.new(0,220,0,80)
 frame.Position = UDim2.new(1,-240,0,50)
 frame.BackgroundColor3 = Color3.fromRGB(40,40,50)
 frame.BorderSizePixel = 0
 frame.Active = true
 frame.Draggable = true
-Instance.new("UICorner",frame).CornerRadius = UDim.new(0,12)
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0,12)
 
-local deliverBtn = Instance.new("TextButton",frame)
+local deliverBtn = Instance.new("TextButton", frame)
 deliverBtn.Size = UDim2.new(0,200,0,50)
 deliverBtn.Position = UDim2.new(0,10,0,15)
 deliverBtn.Text = "DELIVER"
@@ -151,20 +206,17 @@ deliverBtn.TextScaled = true
 deliverBtn.Font = Enum.Font.GothamBold
 
 deliverBtn.MouseButton1Click:Connect(function()
-
 	if moving then
 		moving = false
 		return
 	end
-
 	local target = FindDelivery()
 	if target then
-		moveToTarget(target,deliverBtn)
+		moveToTarget(target, deliverBtn)
 	end
-
 end)
 
-local closeBtn = Instance.new("TextButton",frame)
+local closeBtn = Instance.new("TextButton", frame)
 closeBtn.Size = UDim2.new(0,25,0,25)
 closeBtn.Position = UDim2.new(1,-30,0,5)
 closeBtn.Text = "X"
@@ -178,15 +230,12 @@ closeBtn.MouseButton1Click:Connect(function()
 	gui.Enabled = false
 end)
 
-------------------------------------------------
--- Toggle GUI
-------------------------------------------------
-UIS.InputBegan:Connect(function(input,gp)
-
+-- ======================================
+-- تفعيل واجهة المستخدم عبر RightShift
+-- ======================================
+UIS.InputBegan:Connect(function(input, gp)
 	if gp then return end
-
 	if input.KeyCode == Enum.KeyCode.RightShift then
 		gui.Enabled = not gui.Enabled
 	end
-
 end)
