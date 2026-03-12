@@ -11,7 +11,7 @@ local player = Players.LocalPlayer
 -- KEY SYSTEM
 ------------------------------------------------
 
-local correctKey = "1"
+local correctKey = "arbix hub"
 
 local blur = Instance.new("BlurEffect")
 blur.Size = 20
