@@ -1,6 +1,7 @@
 local Players = game:GetService("Players")
 local Workspace = game:GetService("Workspace")
 local RunService = game:GetService("RunService")
+
 local player = Players.LocalPlayer
 
 local moving = false
@@ -8,38 +9,84 @@ local char, hrp
 local gui, flyButton
 
 local config = {
-    speed = 40, -- السرعة القصوى
-    vertical = 20,
-    flyHeight = 24,
+
+    speed = 30.9199,
+    acceleration = 90,
+
+    vertical = 60,
+    flyHeight = 18,
+
     stopDistance = 3,
-    correctKey = "arbix hub",
-    acceleration = 120 -- تسارع أسرع
+    slowRadius = 14,
+
+    correctKey = "arbix hub"
+
 }
 
+local currentVelocity = Vector3.zero
+local lastDir = Vector3.zero
+
+----------------------------------------------------
+
 local function SetupCharacter(c)
+
     char = c
     hrp = char:WaitForChild("HumanoidRootPart")
+
 end
 
 if player.Character then
     SetupCharacter(player.Character)
 end
+
 player.CharacterAdded:Connect(SetupCharacter)
 
+----------------------------------------------------
+
+local function Smooth(current,target,alpha)
+    return current:Lerp(target,alpha)
+end
+
+local function StabilizeDirection(dir)
+
+    if lastDir.Magnitude == 0 then
+        lastDir = dir
+        return dir
+    end
+
+    local smoothed = lastDir:Lerp(dir,0.25)
+    lastDir = smoothed
+
+    return smoothed
+
+end
+
+----------------------------------------------------
+
 local function FindTarget()
+
     local plots = Workspace:FindFirstChild("Plots")
     if not plots then return end
 
-    for _, plot in pairs(plots:GetChildren()) do
+    for _,plot in pairs(plots:GetChildren()) do
+
         local sign = plot:FindFirstChild("PlotSign")
+
         if sign then
+
             local yourBase = sign:FindFirstChild("YourBase")
+
             if yourBase and yourBase.Enabled then
                 return plot:FindFirstChild("DeliveryHitbox")
             end
+
         end
+
     end
+
 end
+
+----------------------------------------------------
 
 local function MoveToTarget(target)
 
@@ -48,55 +95,97 @@ local function MoveToTarget(target)
     moving = true
     flyButton.Text = "Stop"
 
-    local targetHeight = hrp.Position.Y + config.flyHeight
+    local startPos = hrp.Position
     local currentSpeed = 0
+    local traveled = 0
+
+    local totalDistance =
+        (target.Position - startPos).Magnitude
 
     while moving and target.Parent do
 
         local dt = RunService.Heartbeat:Wait()
 
-        local dir = target.Position - hrp.Position
+        local pos = hrp.Position
+        local dir = target.Position - pos
         local dist = dir.Magnitude
 
-        if dist <= config.stopDistance then break end
+        if dist <= config.stopDistance then
+            break
+        end
 
-        -- تسارع سريع
+        ------------------------------------------------
+        -- stabilize direction
+
+        dir = StabilizeDirection(dir)
+
+        ------------------------------------------------
+        -- acceleration
+
         currentSpeed = math.clamp(
             currentSpeed + config.acceleration * dt,
             0,
             config.speed
         )
 
-        -- إبطاء عند الاقتراب
-        if dist < 12 then
-            currentSpeed = math.min(currentSpeed, dist * 3)
+        ------------------------------------------------
+        -- slowdown near target
+
+        if dist < config.slowRadius then
+            currentSpeed = config.speed * (dist / config.slowRadius)
         end
 
-        local horizontalDir = Vector3.new(dir.X,0,dir.Z)
+        ------------------------------------------------
+        -- horizontal movement
 
+        local horizontalDir = Vector3.new(dir.X,0,dir.Z)
         local horizontal = Vector3.zero
 
         if horizontalDir.Magnitude > 0.1 then
             horizontal = horizontalDir.Unit * currentSpeed
         end
 
-        -- تقليل السرعة القطرية
-        if math.abs(horizontal.X) > 0 and math.abs(horizontal.Z) > 0 then
-            horizontal = horizontal * 0.75
-        end
+        ------------------------------------------------
+        -- progress calculation
 
-        -- الارتفاع مع الحركة بنفس الوقت
-        local y = 0
+        traveled = traveled + (horizontal.Magnitude * dt)
 
-        if hrp.Position.Y < targetHeight then
-            y = config.vertical
-        end
+        local progress =
+            math.clamp(traveled / totalDistance,0,1)
 
-        hrp.AssemblyLinearVelocity = Vector3.new(
+        ------------------------------------------------
+        -- curved jump arc
+
+        local heightOffset =
+            math.sin(progress * math.pi) * config.flyHeight
+
+        local targetY =
+            target.Position.Y + heightOffset
+
+        local heightError = targetY - pos.Y
+
+        local y =
+            math.clamp(heightError * 3,-config.vertical,config.vertical)
+
+        ------------------------------------------------
+        -- velocity target
+
+        local targetVelocity = Vector3.new(
             horizontal.X,
             y,
             horizontal.Z
         )
+
+        ------------------------------------------------
+        -- smoothing
+
+        currentVelocity = Smooth(
+            currentVelocity,
+            targetVelocity,
+            math.clamp(dt*8,0,1)
+        )
+
+        hrp.AssemblyLinearVelocity = currentVelocity
 
     end
 
@@ -110,12 +199,17 @@ local function MoveToTarget(target)
 
 end
 
+----------------------------------------------------
+
 local function MakeDraggable(frame)
 
     local dragging = false
-    local dragInput, dragStart, startPos
+    local dragInput
+    local dragStart
+    local startPos
 
     local function update(input)
+
         local delta = input.Position - dragStart
 
         frame.Position = UDim2.new(
@@ -124,6 +218,7 @@ local function MakeDraggable(frame)
             startPos.Y.Scale,
             startPos.Y.Offset + delta.Y
         )
+
     end
 
     frame.InputBegan:Connect(function(input)
@@ -164,40 +259,38 @@ local function MakeDraggable(frame)
 
 end
 
-local function CreateMainGUI(existingGUI)
+----------------------------------------------------
 
-    gui = existingGUI or Instance.new("ScreenGui")
+local function CreateMainGUI()
 
-    if not existingGUI then
-        gui.Name = "ARBIX_HUB_GUI"
-        gui.ResetOnSpawn = false
-        gui.Parent = player:WaitForChild("PlayerGui")
-    end
+    gui = Instance.new("ScreenGui")
+    gui.Name = "ARBIX_HUB_GUI"
+    gui.ResetOnSpawn = false
+    gui.Parent = player:WaitForChild("PlayerGui")
 
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(0,250,0,120)
     frame.Position = UDim2.new(0.5,0,0.5,0)
     frame.AnchorPoint = Vector2.new(0.5,0.5)
     frame.BackgroundColor3 = Color3.fromRGB(20,20,30)
-    frame.BackgroundTransparency = 0.1
     frame.Parent = gui
 
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0,10)
+    Instance.new("UICorner",frame).CornerRadius = UDim.new(0,10)
 
     MakeDraggable(frame)
 
     local title = Instance.new("TextLabel")
     title.Size = UDim2.new(1,0,0,30)
     title.BackgroundTransparency = 1
-    title.Text = "ARBIX HUB العربي"
-    title.Font = Enum.Font.GothamBlack
-    title.TextSize = 20
+    title.Text = "ARBIX HUB"
     title.TextColor3 = Color3.new(1,1,1)
+    title.Font = Enum.Font.GothamBold
+    title.TextSize = 20
     title.Parent = frame
 
     flyButton = Instance.new("TextButton")
-    flyButton.Size = UDim2.new(0.8,0,0,30)
-    flyButton.Position = UDim2.new(0.1,0,0.4,0)
+    flyButton.Size = UDim2.new(0.8,0,0,35)
+    flyButton.Position = UDim2.new(0.1,0,0.45,0)
     flyButton.Text = "Fly to Steal"
     flyButton.Font = Enum.Font.GothamBold
     flyButton.TextSize = 16
@@ -205,7 +298,7 @@ local function CreateMainGUI(existingGUI)
     flyButton.TextColor3 = Color3.new(1,1,1)
     flyButton.Parent = frame
 
-    Instance.new("UICorner", flyButton).CornerRadius = UDim.new(0,8)
+    Instance.new("UICorner",flyButton).CornerRadius = UDim.new(0,8)
 
     flyButton.MouseButton1Click:Connect(function()
 
@@ -222,89 +315,57 @@ local function CreateMainGUI(existingGUI)
 
     end)
 
-    local close = Instance.new("TextButton")
-    close.Size = UDim2.new(0.1,0,0.3,0)
-    close.Position = UDim2.new(0.9,0,0,0)
-    close.Text = "X"
-    close.Font = Enum.Font.GothamBold
-    close.TextSize = 16
-    close.TextColor3 = Color3.new(1,1,1)
-    close.BackgroundColor3 = Color3.fromRGB(200,50,50)
-    close.Parent = frame
-
-    Instance.new("UICorner", close).CornerRadius = UDim.new(0,5)
-
-    close.MouseButton1Click:Connect(function()
-        gui:Destroy()
-    end)
-
 end
+
+----------------------------------------------------
 
 local function ShowKeySystem()
 
     local keyGUI = Instance.new("ScreenGui")
-    keyGUI.Name = "ARBIX_HUB_Key"
     keyGUI.Parent = player:WaitForChild("PlayerGui")
 
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0,250,0,120)
+    frame.Size = UDim2.new(0,240,0,120)
     frame.Position = UDim2.new(0.5,0,0.5,0)
     frame.AnchorPoint = Vector2.new(0.5,0.5)
     frame.BackgroundColor3 = Color3.fromRGB(20,20,30)
-    frame.BackgroundTransparency = 0.1
     frame.Parent = keyGUI
 
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0,10)
+    Instance.new("UICorner",frame)
 
     MakeDraggable(frame)
 
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(1,0,0,30)
-    label.Position = UDim2.new(0,0,0,10)
-    label.BackgroundTransparency = 1
-    label.Text = "ادخل مفتاح ARBIX HUB"
-    label.Font = Enum.Font.GothamBold
-    label.TextSize = 16
-    label.TextColor3 = Color3.new(1,1,1)
-    label.Parent = frame
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(0.8,0,0,35)
+    box.Position = UDim2.new(0.1,0,0.35,0)
+    box.PlaceholderText = "Enter Key"
+    box.Text = ""
+    box.Parent = frame
 
-    local textbox = Instance.new("TextBox")
-    textbox.Size = UDim2.new(0.8,0,0,30)
-    textbox.Position = UDim2.new(0.1,0,0.4,0)
-    textbox.PlaceholderText = "مفتاحك هنا"
-    textbox.Text = ""
-    textbox.Font = Enum.Font.Gotham
-    textbox.TextSize = 16
-    textbox.BackgroundColor3 = Color3.fromRGB(50,50,50)
-    textbox.TextColor3 = Color3.new(1,1,1)
-    textbox.Parent = frame
-
-    Instance.new("UICorner", textbox).CornerRadius = UDim.new(0,5)
+    Instance.new("UICorner",box)
 
     local button = Instance.new("TextButton")
-    button.Size = UDim2.new(0.8,0,0,30)
+    button.Size = UDim2.new(0.8,0,0,35)
     button.Position = UDim2.new(0.1,0,0.7,0)
-    button.Text = "تحقق"
-    button.Font = Enum.Font.GothamBold
-    button.TextSize = 16
-    button.BackgroundColor3 = Color3.fromRGB(0,120,255)
-    button.TextColor3 = Color3.new(1,1,1)
+    button.Text = "Check"
     button.Parent = frame
 
-    Instance.new("UICorner", button).CornerRadius = UDim.new(0,5)
+    Instance.new("UICorner",button)
 
     button.MouseButton1Click:Connect(function()
 
-        if textbox.Text == config.correctKey then
+        if box.Text == config.correctKey then
             keyGUI:Destroy()
             CreateMainGUI()
         else
-            textbox.Text = ""
-            textbox.PlaceholderText = "المفتاح خطأ!"
+            box.Text = ""
+            box.PlaceholderText = "Wrong Key"
         end
 
     end)
 
 end
+
+----------------------------------------------------
 
 ShowKeySystem()
