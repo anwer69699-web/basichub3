@@ -15,8 +15,8 @@ local player = Players.LocalPlayer
 -- CONFIG
 local config = {
     horizontalSpeed = 30,
-    verticalSpeed = 150,
-    maxHeight = 24,
+    verticalSpeed = 50,
+    maxHeight = 16,
     stopDistance = 6,
     correctKey = "arbix hub"
 }
