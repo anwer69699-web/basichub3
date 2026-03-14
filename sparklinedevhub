@@ -1,6 +1,5 @@
---// ARBIX HUB FULL ARC MOVE + KEY SYSTEM + PROTECTION
+--// ARBIX HUB RTX V1 WITH RAINBOW TITLE
 
--- STOP OLD SCRIPT IF EXISTS
 if getgenv().ARBIX_RUNNING then
     if getgenv().ARBIX_STOP then getgenv().ARBIX_STOP() end
 end
@@ -16,8 +15,8 @@ local player = Players.LocalPlayer
 -- CONFIG
 local config = {
     horizontalSpeed = 30,
-    verticalSpeed = 55,
-    maxHeight = 18,
+    verticalSpeed = 150,
+    maxHeight = 24,
     stopDistance = 6,
     correctKey = "arbix hub"
 }
@@ -29,6 +28,7 @@ local currentVelocity = Vector3.zero
 local lastDir = Vector3.zero
 local flyButton
 local gui
+local flight = false
 
 -- STOP FUNCTION FOR NEW SCRIPT
 getgenv().ARBIX_STOP = function()
@@ -149,7 +149,7 @@ local function MakeDraggable(frame)
     end)
 end
 
--- MAIN GUI WITH FLY BUTTON
+-- MAIN GUI
 local function CreateMainGUI()
     gui = Instance.new("ScreenGui")
     gui.Name = "ARBIX_HUB_GUI"
@@ -157,7 +157,7 @@ local function CreateMainGUI()
     gui.Parent = player.PlayerGui
 
     local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(0,260,0,150)
+    frame.Size = UDim2.new(0,300,0,160)
     frame.Position = UDim2.new(0.5,0,0.5,0)
     frame.AnchorPoint = Vector2.new(0.5,0.5)
     frame.BackgroundColor3 = Color3.fromRGB(20,20,30)
@@ -165,19 +165,32 @@ local function CreateMainGUI()
     Instance.new("UICorner",frame)
     MakeDraggable(frame)
 
+    -- RAINBOW TITLE
     local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1,0,0,30)
+    title.Size = UDim2.new(1,0,0,40)
     title.Position = UDim2.new(0,0,0,10)
     title.BackgroundTransparency = 1
-    title.Text = "ARBIX HUB"
+    title.Text = "ARBIX HUB RTX V1"
     title.Font = Enum.Font.GothamBold
-    title.TextSize = 20
-    title.TextColor3 = Color3.new(1,1,1)
+    title.TextSize = 22
+    title.TextColor3 = Color3.fromRGB(255,0,0)
     title.Parent = frame
 
+    -- SCRIPT BY SPARKLINEDEV
+    local subtitle = Instance.new("TextLabel")
+    subtitle.Size = UDim2.new(1,0,0,20)
+    subtitle.Position = UDim2.new(0,0,0,50)
+    subtitle.BackgroundTransparency = 1
+    subtitle.Text = "Script by sparklinedev"
+    subtitle.Font = Enum.Font.Gotham
+    subtitle.TextSize = 14
+    subtitle.TextColor3 = Color3.fromRGB(180,180,180)
+    subtitle.Parent = frame
+
+    -- FLY BUTTON
     flyButton = Instance.new("TextButton")
     flyButton.Size = UDim2.new(0.8,0,0,35)
-    flyButton.Position = UDim2.new(0.1,0,0.65,0)
+    flyButton.Position = UDim2.new(0.1,0,0.7,0)
     flyButton.Text = "Fly to Delivery"
     flyButton.Font = Enum.Font.GothamBold
     flyButton.TextSize = 16
@@ -195,6 +208,19 @@ local function CreateMainGUI()
             flyButton.Text = "No Delivery Found"
             wait(2)
             flyButton.Text = "Fly to Delivery"
+        end
+    end)
+
+    -- RAINBOW EFFECT
+    spawn(function()
+        local t = 0
+        while gui.Parent do
+            t += 0.03
+            local r = math.floor((math.sin(t)+1)*127)
+            local g = math.floor((math.sin(t + 2)*127)+128)
+            local b = math.floor((math.sin(t + 4)*127)+128)
+            title.TextColor3 = Color3.fromRGB(r,g,b)
+            RunService.RenderStepped:Wait()
         end
     end)
 end
