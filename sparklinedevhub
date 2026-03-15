@@ -13,11 +13,11 @@ local player = Players.LocalPlayer
 
 -- CONFIG
 local config = {
-    horizontalSpeed = 30,
-    verticalSpeed = 50,
-    maxHeight = 19,
+    horizontalSpeed = 28,
+    verticalSpeed = 30,
+    maxHeight = 14,
     stopDistance = 6,
-    landingSpeed = 40,
+    landingSpeed = 30,
     maxDistance = 400
 }
 
