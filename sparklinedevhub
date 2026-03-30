@@ -17,8 +17,8 @@ local player = Players.LocalPlayer
 
 --⚡ CONFIG - ENHANCED SPEEDS (NO LANDING SYSTEM)
 local config = {
-    horizontalSpeed = 24,       --⚡ أسرع أفقي
-    verticalSpeed = 26,         --⚡ أسرع عمودي (للصعود والهبوط)
+    horizontalSpeed = 28,       --⚡ أسرع أفقي
+    verticalSpeed = 35,         --⚡ أسرع عمودي (للصعود والهبوط)
     maxHeight = 15,             --⚡ ارتفاع أعلى
     stopDistance = 2.5,         --⚡ توقف فوري عند الاقتراب
     maxDistance = 2000,
