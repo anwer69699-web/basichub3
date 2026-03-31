@@ -1,477 +1,227 @@
---// ARBIX HUB RTX V2.6 - INSTANT VERTICAL LANDING (NO LAG)
---// Core: AssemblyLinearVelocity (ASS) - UNCHANGED
---// Landing: REMOVED - Uses verticalSpeed directly like ascent
---// Made by sparklinedev
+-- Levixrl UI FINAL (بدون كشف برين روت)
 
-if getgenv().ARBIX_RUNNING then
-    if getgenv().ARBIX_STOP then getgenv().ARBIX_STOP() end
-end
-getgenv().ARBIX_RUNNING = true
+if getgenv().LevixrlLoaded then return end
+getgenv().LevixrlLoaded = true
 
+-- SERVICES
 local Players = game:GetService("Players")
-local Workspace = game:GetService("Workspace")
-local RunService = game:GetService("RunService")
-local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local TeleportService = game:GetService("TeleportService")
 
 local player = Players.LocalPlayer
+local char = player.Character or player.CharacterAdded:Wait()
+local hrp = char:WaitForChild("HumanoidRootPart")
+local humanoid = char:WaitForChild("Humanoid")
 
---⚡ CONFIG - ENHANCED SPEEDS (NO LANDING SYSTEM)
-local config = {
-    horizontalSpeed = 28,       --⚡ أسرع أفقي
-    verticalSpeed = 35,         --⚡ أسرع عمودي (للصعود والهبوط)
-    maxHeight = 15,             --⚡ ارتفاع أعلى
-    stopDistance = 2.5,         --⚡ توقف فوري عند الاقتراب
-    maxDistance = 2000,
-    instantSnap = true          --⚡ تثبيت فوري عند الوصول
+-- CONFIG
+getgenv().Config = {
+    Speed = {
+        AutoDelivery = 30,
+        OtherDelivery = 55,
+        FollowPlayer = 60
+    },
+    LiftHeight = 15
 }
 
---🔧 VARIABLES
-local char, hrp
-local moving = false
-local currentVelocity = Vector3.zero
-local lastDir = Vector3.zero
-local flyButton, statusLabel, distanceLabel
-local gui, mainFrame
-local connection = nil
-local targetCache = nil
-local lastTargetTime = 0
-local deliveryHistory = {}
+-- STATES
+getgenv().States = {
+    AutoDelivery = false,
+    OtherDeliveryMove = false,
+    FollowPlayer = false
+}
 
---🛑 STOP FUNCTION
-getgenv().ARBIX_STOP = function()
-    moving = false
-    if connection then connection:Disconnect() connection=nil end
-    if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
-    if gui then gui:Destroy() end
-    getgenv().ARBIX_RUNNING = false
+-- =========================
+-- 🔒 LOCK & MOVE
+-- =========================
+local oldWalk, oldJump = humanoid.WalkSpeed, humanoid.JumpPower
+local controlling = false
+
+local function Lock(state)
+    humanoid.WalkSpeed = state and 0 or oldWalk
+    humanoid.JumpPower = state and 0 or oldJump
 end
 
---👤 CHARACTER SETUP
-local function SetupCharacter(c)
-    char = c
-    hrp = char:WaitForChild("HumanoidRootPart")
-    moving = false
-    targetCache = nil
-    if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
+local function Stop()
+    controlling = false
+    hrp.AssemblyLinearVelocity = Vector3.zero
+    Lock(false)
 end
-if player.Character then SetupCharacter(player.Character) end
-player.CharacterAdded:Connect(SetupCharacter)
 
---🧠 SMOOTHING
-local function Smooth(current, target, alpha)
-    return current:Lerp(target, math.clamp(alpha, 0, 1))
+local function MoveLift(pos, speed)
+    controlling = true
+    Lock(true)
+    local target = Vector3.new(pos.X, pos.Y + getgenv().Config.LiftHeight, pos.Z)
+    local dir = target - hrp.Position
+    local flat = Vector3.new(dir.X,0,dir.Z)
+    local vel = flat.Magnitude > 2 and flat.Unit * speed or Vector3.zero
+    vel += Vector3.new(0,(target.Y-hrp.Position.Y)*2,0)
+    hrp.AssemblyLinearVelocity = vel
 end
-local function StabilizeDirection(dir)
-    if lastDir.Magnitude == 0 then
-        lastDir = dir
-        return dir
+
+local function MoveFlat(pos, speed)
+    controlling = true
+    local dir = pos - hrp.Position
+    local flat = Vector3.new(dir.X,0,dir.Z)
+    hrp.AssemblyLinearVelocity = flat.Magnitude > 2 and flat.Unit * speed or Vector3.zero
+end
+
+-- =========================
+-- 🔍 DELIVERY
+-- =========================
+local function IsMine(plot)
+    local s = plot:FindFirstChild("PlotSign")
+    return s and s:FindFirstChild("YourBase") and s.YourBase.Enabled
+end
+
+local function GetMyDelivery()
+    local plots = workspace:FindFirstChild("Plots")
+    if not plots then return end
+    for _,p in pairs(plots:GetChildren()) do
+        if IsMine(p) then
+            for _,v in pairs(p:GetDescendants()) do
+                if v.Name:lower():find("delivery") then return v end
+            end
+        end
     end
-    lastDir = lastDir:Lerp(dir, 0.35)
-    return lastDir
 end
 
---🎯 ENHANCED SMART FINDER
-local function FindTarget()
-    local currentTime = tick()
-    
-    if targetCache and (currentTime - lastTargetTime) < 0.2 then
-        if targetCache.Parent then return targetCache end
-    end
-    
-    local plots = Workspace:FindFirstChild("Plots")
-    if not plots then return nil end
-    
-    local bestTarget = nil
-    local bestScore = -math.huge
-    local playerPos = hrp and hrp.Position or Vector3.zero
-    
-    for _, plot in pairs(plots:GetChildren()) do
-        local sign = plot:FindFirstChild("PlotSign")
-        if sign then
-            local yourBase = sign:FindFirstChild("YourBase")
-            if yourBase and yourBase.Enabled then
-                local possibleTargets = {
-                    plot:FindFirstChild("DeliveryHitbox"),
-                    plot:FindFirstChild("DeliveryBox"),
-                    plot:FindFirstChild("DeliveryZone"),
-                    plot:FindFirstChild("DropZone"),
-                    plot:FindFirstChild("Target")
-                }
-                
-                for _, target in pairs(possibleTargets) do
-                    if target and target:IsA("BasePart") then
-                        local distance = (target.Position - playerPos).Magnitude
-                        local score = 3000 - distance
-                        
-                        if distance < 20 then score = score + 2000 end
-                        if deliveryHistory[target.Name] then score = score + 500 end
-                        if distance > config.maxDistance then score = score - 3000 end
-                        
-                        if score > bestScore then
-                            bestScore = score
-                            bestTarget = target
-                        end
-                    end
+local function GetOtherDelivery()
+    local plots = workspace:FindFirstChild("Plots")
+    if not plots then return end
+    local best,dist=nil,math.huge
+    for _,p in pairs(plots:GetChildren()) do
+        if not IsMine(p) then
+            for _,v in pairs(p:GetDescendants()) do
+                if v.Name:lower():find("delivery") then
+                    local d=(hrp.Position-v.Position).Magnitude
+                    if d<dist then dist=d; best=v end
                 end
             end
         end
     end
-    
-    --🔍 بحث احتياطي
-    if not bestTarget then
-        for _, plot in pairs(plots:GetChildren()) do
-            for _, obj in pairs(plot:GetDescendants()) do
-                if obj:IsA("BasePart") then
-                    local name = obj.Name:lower()
-                    if name:find("delivery") or name:find("drop") or name:find("box") then
-                        if hrp and (obj.Position - hrp.Position).Magnitude < config.maxDistance then
-                            bestTarget = obj
-                            break
-                        end
-                    end
+    return best
+end
+
+-- =========================
+-- 🔁 LOOP
+-- =========================
+task.spawn(function()
+    while true do
+        local active=false
+        if getgenv().States.AutoDelivery then
+            local t=GetMyDelivery()
+            if t then MoveLift(t.Position,getgenv().Config.Speed.AutoDelivery) active=true end
+        elseif getgenv().States.OtherDeliveryMove then
+            local t=GetOtherDelivery()
+            if t then MoveFlat(t.Position,getgenv().Config.Speed.OtherDelivery) active=true end
+        elseif getgenv().States.FollowPlayer then
+            local closest,dist=nil,math.huge
+            for _,p in pairs(Players:GetPlayers()) do
+                if p~=player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                    local d=(hrp.Position-p.Character.HumanoidRootPart.Position).Magnitude
+                    if d<dist then dist=d; closest=p.Character.HumanoidRootPart end
                 end
             end
-            if bestTarget then break end
+            if closest then MoveFlat(closest.Position,getgenv().Config.Speed.FollowPlayer) active=true end
         end
+        if not active and controlling then Stop() end
+        task.wait(0.08)
     end
-    
-    if bestTarget then
-        targetCache = bestTarget
-        lastTargetTime = currentTime
-    end
-    
-    return bestTarget
-end
+end)
 
---🎯 PREDICTIVE POSITION
-local function GetTargetPosition(target)
-    if not target then return nil end
-    if target:IsA("BasePart") and target.AssemblyLinearVelocity.Magnitude > 0.1 then
-        local distance = hrp and (target.Position - hrp.Position).Magnitude or 0
-        local predictTime = math.min(distance / config.horizontalSpeed, 1)
-        return target.Position + (target.AssemblyLinearVelocity * predictTime * 0.3)
-    end
-    return target.Position
-end
-
---🚀 INSTANT VERTICAL FLIGHT - NO LANDING LAG
-local function MoveToTarget(target)
-    if not hrp or not target then 
-        UpdateStatus("❌ No Target", Color3.fromRGB(255,50,50))
-        return 
-    end
-    
-    moving = true
-    
-    if flyButton then
-        flyButton.Text = "⏹️ STOP"
-        flyButton.BackgroundColor3 = Color3.fromRGB(255,50,50)
-    end
-    UpdateStatus("🚀 FLYING...", Color3.fromRGB(0,255,150))
-    
-    local startPos = hrp.Position
-    local targetPos = GetTargetPosition(target) or target.Position
-    
-    --⚡ حساب نقطة القمة فوق الهدف
-    local distance = (targetPos - startPos).Magnitude
-    local peakHeight = math.min(distance * 0.5, config.maxHeight)
-    local peakPos = targetPos + Vector3.new(0, peakHeight, 0)
-    
-    local phase = "ASCENT"
-    
-    connection = RunService.Heartbeat:Connect(function(dt)
-        if not moving or not hrp or not target.Parent then
-            FinishDelivery(false)
-            return
+-- =========================
+-- 🌐 SERVER HOP
+-- =========================
+local function ServerHop()
+    local data = game:GetService("HttpService"):JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/"..game.PlaceId.."/servers/Public?limit=100"))
+    for _,v in pairs(data.data) do
+        if v.playing < v.maxPlayers and v.playing > v.maxPlayers*0.6 then
+            TeleportService:TeleportToPlaceInstance(game.PlaceId,v.id)
+            break
         end
-        
-        --🎯 تحديث الهدف إذا تحرك
-        if target:IsA("BasePart") then
-            targetPos = GetTargetPosition(target) or target.Position
-            peakPos = targetPos + Vector3.new(0, peakHeight, 0)
-        end
-        
-        local pos = hrp.Position
-        local remainingToTarget = (targetPos - pos).Magnitude
-        local remainingToPeak = (peakPos - pos).Magnitude
-        
-        --📊 تحديث المسافة
-        UpdateDistance(remainingToTarget)
-        
-        --⚡ وصول فوري بدون لاق
-        if remainingToTarget <= config.stopDistance then
-            --⚡ INSTANT SNAP - NO LANDING LAG
-            hrp.CFrame = CFrame.new(targetPos)
-            hrp.AssemblyLinearVelocity = Vector3.zero
-            FinishDelivery(true)
-            return
-        end
-        
-        --🎯 تحديد المرحلة
-        local targetPoint
-        if phase == "ASCENT" and remainingToPeak < 8 then
-            phase = "DESCENT"
-        end
-        
-        if phase == "ASCENT" then
-            targetPoint = peakPos
-            UpdateStatus("⬆️ UP", Color3.fromRGB(0,200,255))
-        else
-            targetPoint = targetPos
-            UpdateStatus("⬇️ DOWN", Color3.fromRGB(255,200,0))
-        end
-        
-        --🧮 حساب الاتجاه والسرعة - نفس السرعة للصعود والهبوط
-        local dir = StabilizeDirection(targetPoint - pos)
-        local horizontalDir = Vector3.new(dir.X, 0, dir.Z)
-        
-        --⚡ سرعة أفقية قصوى
-        local horizontal = horizontalDir.Magnitude > 0.1 and horizontalDir.Unit * config.horizontalSpeed or Vector3.zero
-        
-        --⚡ سرعة عمودية - نفس السرعة للصعود والهبوط (NO LANDING SLOWDOWN)
-        local verticalDist = targetPoint.Y - pos.Y
-        local vertical = math.clamp(
-            verticalDist * 5, --⚡ استجابة فورية
-            -config.verticalSpeed, --⚡ نفس سرعة الهبوط = سرعة الصعود
-            config.verticalSpeed
-        )
-        
-        --⚡ تطبيق السرعة مباشرة
-        local targetVelocity = Vector3.new(horizontal.X, vertical, horizontal.Z)
-        currentVelocity = Smooth(currentVelocity, targetVelocity, math.clamp(dt * 12, 0, 1))
-        hrp.AssemblyLinearVelocity = currentVelocity
-    end)
-end
-
---✅ FINISH
-function FinishDelivery(success)
-    moving = false
-    if connection then connection:Disconnect() connection=nil end
-    if hrp then hrp.AssemblyLinearVelocity = Vector3.zero end
-    
-    if success then
-        UpdateStatus("✅ DELIVERED!", Color3.fromRGB(0,255,0))
-        if targetCache then
-            deliveryHistory[targetCache.Name] = (deliveryHistory[targetCache.Name] or 0) + 1
-        end
-    else
-        UpdateStatus("❌ STOPPED", Color3.fromRGB(255,100,100))
-    end
-    
-    if flyButton then
-        flyButton.Text = "🚀 FLY TO DELIVERY"
-        flyButton.BackgroundColor3 = Color3.fromRGB(0,150,255)
     end
 end
 
---🎨 GUI FUNCTIONS
-function UpdateStatus(text, color)
-    if statusLabel then
-        statusLabel.Text = text
-        statusLabel.TextColor3 = color or Color3.fromRGB(255,255,255)
+-- =========================
+-- 🎛️ UI
+-- =========================
+local gui=Instance.new("ScreenGui",CoreGui)
+local main=Instance.new("Frame",gui)
+main.Size=UDim2.new(0,250,0,360)
+main.Position=UDim2.new(0.5,-125,0.5,-180)
+main.BackgroundColor3=Color3.fromRGB(25,25,45)
+Instance.new("UICorner",main)
+
+-- TITLE
+local title=Instance.new("TextLabel",main)
+title.Size=UDim2.new(1,0,0,30)
+title.Text="Levixrl"
+title.TextColor3=Color3.fromRGB(0,200,255)
+title.BackgroundTransparency=1
+title.TextScaled=true
+title.Font=Enum.Font.GothamBold
+
+-- BUTTON CREATOR
+local function CreateButton(text,key,y)
+    local b=Instance.new("TextButton",main)
+    b.Size=UDim2.new(1,-20,0,35)
+    b.Position=UDim2.new(0,10,0,y)
+    b.Text=text
+    b.BackgroundColor3=Color3.fromRGB(50,50,80)
+    b.TextColor3=Color3.new(1,1,1)
+    Instance.new("UICorner",b)
+    if key then
+        b.MouseButton1Click:Connect(function()
+            getgenv().States[key]=not getgenv().States[key]
+            b.Text=text.." "..(getgenv().States[key] and "(مفعل)" or "")
+        end)
     end
+    return b
 end
 
-function UpdateDistance(dist)
-    if distanceLabel then
-        distanceLabel.Text = "📏 " .. math.floor(dist) .. "m"
+CreateButton("نقل للسرقة","AutoDelivery",40)
+CreateButton("تحريك للبرين روت","OtherDeliveryMove",80)
+CreateButton("ضرب اقرب لاعب","FollowPlayer",120)
+CreateButton("سيرفر هوب",nil,160).MouseButton1Click:Connect(ServerHop)
+
+-- تيك توك وديسكورد
+local tiktokBtn = Instance.new("TextButton",main)
+tiktokBtn.Size=UDim2.new(1,-20,0,35)
+tiktokBtn.Position=UDim2.new(0,10,0,210)
+tiktokBtn.Text="TikTok: levix_rl"
+tiktokBtn.BackgroundColor3=Color3.fromRGB(255,100,100)
+tiktokBtn.TextColor3=Color3.new(1,1,1)
+Instance.new("UICorner",tiktokBtn)
+
+local discordBtn = Instance.new("TextButton",main)
+discordBtn.Size=UDim2.new(1,-20,0,35)
+discordBtn.Position=UDim2.new(0,10,0,250)
+discordBtn.Text="Discord"
+discordBtn.BackgroundColor3=Color3.fromRGB(100,255,100)
+discordBtn.TextColor3=Color3.new(1,1,1)
+Instance.new("UICorner",discordBtn)
+discordBtn.MouseButton1Click:Connect(function()
+    setclipboard("https://discord.gg/5vgck2tM")
+end)
+
+-- DRAG
+local dragging,dragInput,dragStart,startPos
+main.InputBegan:Connect(function(i)
+    if i.UserInputType==Enum.UserInputType.MouseButton1 or i.UserInputType==Enum.UserInputType.Touch then
+        dragging=true
+        dragStart=i.Position
+        startPos=main.Position
+        i.Changed:Connect(function()
+            if i.UserInputState==Enum.UserInputState.End then dragging=false end
+        end)
     end
-end
+end)
 
---🖱️ DRAGGABLE
-local function MakeDraggable(frame)
-    local dragging, dragInput, dragStart, startPos
-    frame.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = true
-            dragStart = input.Position
-            startPos = frame.Position
-        end
-    end)
-    frame.InputChanged:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseMovement then 
-            dragInput = input 
-        end
-    end)
-    RunService.RenderStepped:Connect(function()
-        if dragging and dragInput then
-            local delta = dragInput.Position - dragStart
-            frame.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + delta.X,
-                startPos.Y.Scale, startPos.Y.Offset + delta.Y
-            )
-        end
-    end)
-    frame.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 then
-            dragging = false
-        end
-    end)
-end
-
---🖥️ GUI
-local function CreateMainGUI()
-    gui = Instance.new("ScreenGui")
-    gui.Name = "ARBIX_HUB_V26"
-    gui.ResetOnSpawn = false
-    gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    gui.Parent = player.PlayerGui
-
-    mainFrame = Instance.new("Frame")
-    mainFrame.Size = UDim2.new(0,280,0,180)
-    mainFrame.Position = UDim2.new(0.5,-140,0.5,-90)
-    mainFrame.BackgroundColor3 = Color3.fromRGB(20,20,35)
-    mainFrame.BorderSizePixel = 0
-    mainFrame.Active = true
-    mainFrame.Parent = gui
-    
-    Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0,15)
-    
-    -- Glow
-    local glow = Instance.new("ImageLabel")
-    glow.Size = UDim2.new(1,30,1,30)
-    glow.Position = UDim2.new(0,-15,0,-15)
-    glow.BackgroundTransparency = 1
-    glow.Image = "rbxassetid://5028857084"
-    glow.ImageColor3 = Color3.fromRGB(0,200,255)
-    glow.ImageTransparency = 0.85
-    glow.ScaleType = Enum.ScaleType.Slice
-    glow.SliceCenter = Rect.new(24,24,276,276)
-    glow.Parent = mainFrame
-
-    --🌈 Title
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1,0,0,32)
-    title.Position = UDim2.new(0,0,0,8)
-    title.BackgroundTransparency = 1
-    title.Text = "⚡ ARBIX V2.6"
-    title.Font = Enum.Font.GothamBlack
-    title.TextSize = 22
-    title.TextColor3 = Color3.fromRGB(0,200,255)
-    title.Parent = mainFrame
-    
-    spawn(function()
-        while title and title.Parent do
-            for hue = 0, 1, 0.02 do
-                if not title or not title.Parent then break end
-                title.TextColor3 = Color3.fromHSV(hue, 0.9, 1)
-                RunService.RenderStepped:Wait()
-            end
-        end
-    end)
-
-    --👤 Subtitle
-    local subtitle = Instance.new("TextLabel")
-    subtitle.Size = UDim2.new(1,0,0,16)
-    subtitle.Position = UDim2.new(0,0,0,38)
-    subtitle.BackgroundTransparency = 1
-    subtitle.Text = "Instant Vertical | No Landing Lag"
-    subtitle.Font = Enum.Font.Gotham
-    subtitle.TextSize = 10
-    subtitle.TextColor3 = Color3.fromRGB(150,150,150)
-    subtitle.Parent = mainFrame
-
-    --📊 Stats
-    local statsFrame = Instance.new("Frame")
-    statsFrame.Size = UDim2.new(0.9,0,0,40)
-    statsFrame.Position = UDim2.new(0.05,0,0.32,0)
-    statsFrame.BackgroundColor3 = Color3.fromRGB(30,30,50)
-    statsFrame.BorderSizePixel = 0
-    statsFrame.Parent = mainFrame
-    Instance.new("UICorner", statsFrame).CornerRadius = UDim.new(0,8)
-
-    statusLabel = Instance.new("TextLabel")
-    statusLabel.Size = UDim2.new(1,0,0,18)
-    statusLabel.Position = UDim2.new(0,0,0,4)
-    statusLabel.BackgroundTransparency = 1
-    statusLabel.Text = "⏳ READY"
-    statusLabel.Font = Enum.Font.GothamBold
-    statusLabel.TextSize = 13
-    statusLabel.TextColor3 = Color3.fromRGB(100,255,100)
-    statusLabel.Parent = statsFrame
-
-    distanceLabel = Instance.new("TextLabel")
-    distanceLabel.Size = UDim2.new(1,0,0,16)
-    distanceLabel.Position = UDim2.new(0,0,0,22)
-    distanceLabel.BackgroundTransparency = 1
-    distanceLabel.Text = "📏 --m"
-    distanceLabel.Font = Enum.Font.Gotham
-    distanceLabel.TextSize = 11
-    distanceLabel.TextColor3 = Color3.fromRGB(180,180,180)
-    distanceLabel.Parent = statsFrame
-
-    --🚀 Button
-    flyButton = Instance.new("TextButton")
-    flyButton.Size = UDim2.new(0.85,0,0,38)
-    flyButton.Position = UDim2.new(0.075,0,0.62,0)
-    flyButton.Text = "🚀 FLY"
-    flyButton.Font = Enum.Font.GothamBlack
-    flyButton.TextSize = 16
-    flyButton.BackgroundColor3 = Color3.fromRGB(0,150,255)
-    flyButton.TextColor3 = Color3.new(1,1,1)
-    flyButton.Parent = mainFrame
-    
-    Instance.new("UICorner", flyButton).CornerRadius = UDim.new(0,10)
-    
-    local btnGradient = Instance.new("UIGradient")
-    btnGradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(0,170,255)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(0,120,220))
-    })
-    btnGradient.Parent = flyButton
-
-    --⚡ Click
-    flyButton.MouseButton1Click:Connect(function()
-        if moving then
-            FinishDelivery(false)
-            return
-        end
-        
-        local target = FindTarget()
-        if target then
-            MoveToTarget(target)
-        else
-            UpdateStatus("❌ NOT FOUND!", Color3.fromRGB(255,80,80))
-            flyButton.Text = "🔍..."
-            wait(0.5)
-            flyButton.Text = "🚀 FLY"
-            UpdateStatus("⏳ READY", Color3.fromRGB(100,255,100))
-        end
-    end)
-    
-    -- Hover
-    flyButton.MouseEnter:Connect(function()
-        if not moving then
-            TweenService:Create(flyButton, TweenInfo.new(0.2), {
-                BackgroundColor3 = Color3.fromRGB(0,190,255),
-                Size = UDim2.new(0.87,0,0,40)
-            }):Play()
-        end
-    end)
-    flyButton.MouseLeave:Connect(function()
-        if not moving then
-            TweenService:Create(flyButton, TweenInfo.new(0.2), {
-                BackgroundColor3 = Color3.fromRGB(0,150,255),
-                Size = UDim2.new(0.85,0,0,38)
-            }):Play()
-        end
-    end)
-
-    --ℹ️ Info
-    local info = Instance.new("TextLabel")
-    info.Size = UDim2.new(1,0,0,14)
-    info.Position = UDim2.new(0,0,0.90,0)
-    info.BackgroundTransparency = 1
-    info.Text = "H:50 | V:45 | Instant | No Lag"
-    info.Font = Enum.Font.Gotham
-    info.TextSize = 9
-    info.TextColor3 = Color3.fromRGB(100,100,120)
-    info.Parent = mainFrame
-
-    MakeDraggable(mainFrame)
-end
-
---🎬 INIT
-CreateMainGUI()
-
-print("✅ ARBIX HUB RTX V2.6 Loaded - Instant Vertical | Landing System REMOVED")
+main.InputChanged:Connect(function(i) dragInput=i end)
+UIS.InputChanged:Connect(function(i)
+    if i==dragInput and dragging then
+        local delta=i.Position-dragStart
+        main.Position=UDim2.new(startPos.X.Scale,startPos.X.Offset+delta.X,startPos.Y.Scale,startPos.Y.Offset+delta.Y)
+    end
+end)
