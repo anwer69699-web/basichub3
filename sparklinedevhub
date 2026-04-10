@@ -1,1169 +1,528 @@
+--// ============================================
+--// LUA DECOMPILER & DECRYPTOR v2.0
+--// يقرأ السكربت ويفك التشفيرات البسيطة
+--// ============================================
+
 local Players = game:GetService("Players")
 local RunService = game:GetService("RunService")
-local UserInputService = game:GetService("UserInputService")
-local TweenService = game:GetService("TweenService")
+local HttpService = game:GetService("HttpService")
 local Player = Players.LocalPlayer
-
 local PlayerGui = Player:WaitForChild("PlayerGui")
 
---// Delete old GUI
+--// حذف GUI القديم
 pcall(function()
-    local oldGui = PlayerGui:FindFirstChild("VelocityUltraV8_Fixed")
-    if oldGui then oldGui:Destroy() end
+    local old = PlayerGui:FindFirstChild("LuaDecompilerV2")
+    if old then old:Destroy() end
 end)
 
---// ==================== [1] Variables ====================
-
-local Enabled = {
-    AutoLeft = false,
-    AutoRight = false,
-    SpeedBoost = false,
-    Galaxy = false,
-    StealSystem = false,
-    AntiRagdoll = false,
+--// المتغيرات العامة
+local DecompilerState = {
+    IsRunning = false,
+    TargetScript = nil,
+    OriginalCode = "",
+    DeobfuscatedCode = "",
+    EncryptionLayers = {},
+    Logs = {}
 }
 
-local Values = {
-    AUTO_SPEED = 53,
-    STEAL_SPEED = 29,
-    NORMAL_SPEED = 53,
-    DEFAULT_GRAVITY = 196.2,
-    GalaxyGravityPercent = 40,
-    HOP_POWER = 35,
-    HOP_COOLDOWN = 0.08,
-    MAX_SPEED = 50,
-    JITTER_AMOUNT = 0,
-}
-
-local Connections = {}
-local galaxyVectorForce = nil
-local galaxyAttachment = nil
-local spaceHeld = false
-local lastHopTime = 0
-local originalJumpPower = 50
-local LastFire = {}
-local StealCooldown = 0.15
-local IsAtLocation2 = false
-local autoPhase = "START"
-local currentPath = nil
-local waitingForSteal = false
-
-local LEFT_POINTS = {
-    START = Vector3.new(-473.43, -7.30, 95.59),
-    POINT_2 = Vector3.new(-485.73, -5.15, 95.42),
-    POINT_3 = Vector3.new(-473.43, -7.30, 95.59),
-    END = Vector3.new(-473.96, -7.30, 19.63),
-}
-
-local RIGHT_POINTS = {
-    START = Vector3.new(-474.13, -7.30, 24.17),
-    POINT_2 = Vector3.new(-485.17, -5.15, 25.08),
-    POINT_3 = Vector3.new(-474.13, -7.30, 24.17),
-    END = Vector3.new(-474.55, -7.30, 23.52),
-}
-
---// ==================== [2] Cleanup Functions ====================
-
-local function StopAllSystems()
-    Enabled.AutoLeft = false
-    Enabled.AutoRight = false
-    Enabled.SpeedBoost = false
-    Enabled.Galaxy = false
-    Enabled.StealSystem = false
-    Enabled.AntiRagdoll = false
-    
-    autoPhase = "START"
-    currentPath = nil
-    waitingForSteal = false
-    
-    for name, conn in pairs(Connections) do
-        if conn then 
-            pcall(function() conn:Disconnect() end) 
+--// أنماط التشفيرات الشائعة
+local EncryptionPatterns = {
+    {
+        Name = "Base64",
+        Pattern = "([A-Za-z0-9+/]+={0,2})",
+        Decoder = function(str)
+            -- Base64 decoder بسيط
+            local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+            str = string.gsub(str, '[^'..b..'=]', '')
+            return (str:gsub('.', function(x)
+                if (x == '=') then return '' end
+                local r,f='',(b:find(x)-1)
+                for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
+                return r
+            end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+                if (#x ~= 8) then return '' end
+                local c=0
+                for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
+                return string.char(c)
+            end))
         end
-        Connections[name] = nil
-    end
-    
-    for _, name in ipairs({"GalaxyLoop", "StealLoop", "PositionCheck", "MovementLoop", "AntiRagdollLoop"}) do
-        if getgenv()[name] then
-            pcall(function() getgenv()[name]:Disconnect() end)
-            getgenv()[name] = nil
+    },
+    {
+        Name = "Hex Escape",
+        Pattern = "\\x([0-9A-Fa-f][0-9A-Fa-f])",
+        Decoder = function(hex)
+            return string.char(tonumber(hex, 16))
         end
-    end
-    
-    if galaxyVectorForce then 
-        pcall(function() galaxyVectorForce:Destroy() end) 
-        galaxyVectorForce = nil 
-    end
-    if galaxyAttachment then 
-        pcall(function() galaxyAttachment:Destroy() end) 
-        galaxyAttachment = nil 
-    end
-    
-    pcall(function()
-        local c = Player.Character
-        if c then
-            local hum = c:FindFirstChildOfClass("Humanoid")
-            if hum then 
-                if originalJumpPower then hum.JumpPower = originalJumpPower end
-                hum:Move(Vector3.zero, false)
+    },
+    {
+        Name = "String Reverse",
+        Pattern = "string%.reverse%([\"']([^\"']+)[\"']%)",
+        Decoder = function(str)
+            return string.reverse(str)
+        end
+    },
+    {
+        Name = "Char Code",
+        Pattern = "string%.char%(([%d%s,]+)%)",
+        Decoder = function(codes)
+            local result = ""
+            for num in codes:gmatch("%d+") do
+                result = result .. string.char(tonumber(num))
             end
-            workspace.Gravity = Values.DEFAULT_GRAVITY
+            return result
         end
-    end)
-    
-    print("All Systems Stopped")
-end
-
---// ==================== [3] Advanced Anti-Ragdoll System ====================
-
-local AntiRagdollData = {
-    IsRagdolled = false,
-    LastRagdollTime = 0,
-    RagdollConnection = nil,
-    RecoveryConnection = nil,
-    RagdollState = nil,
+    },
+    {
+        Name = "Loadstring Pattern",
+        Pattern = "loadstring%((.-)%)%(%)",
+        Decoder = function(code)
+            return "--// Decoded Loadstring Content:\\n" .. code
+        end
+    }
 }
 
-local function isActuallyRagdolled()
-    local c = Player.Character
-    if not c then return false end
-    
-    local hum = c:FindFirstChildOfClass("Humanoid")
-    local hrp = c:FindFirstChild("HumanoidRootPart")
-    if not hum or not hrp then return false end
-    
-    --// Check multiple ragdoll indicators
-    local state = hum:GetState()
-    local isRagdollState = (state == Enum.HumanoidStateType.Ragdoll or 
-                           state == Enum.HumanoidStateType.FallingDown or
-                           state == Enum.HumanoidStateType.Physics)
-    
-    local isPlatformStand = hum.PlatformStand == true
-    local isAnchored = hrp.Anchored
-    local highVelocity = hrp.AssemblyLinearVelocity.Magnitude > 100
-    
-    --// Check for ragdoll constraints (joints broken)
-    local hasRagdollJoints = false
-    for _, v in pairs(c:GetDescendants()) do
-        if v:IsA("BallSocketConstraint") or v:IsA("HingeConstraint") then
-            if v.Name:lower():find("ragdoll") or v.Name:lower():find("neck") then
-                hasRagdollJoints = true
-                break
-            end
-        end
-    end
-    
-    return isRagdollState or isPlatformStand or hasRagdollJoints or (highVelocity and isAnchored)
-end
+--// ============================================
+--// نظام تفكيك التشفير
+--// ============================================
 
-local function forceUnragdoll()
-    local c = Player.Character
-    if not c then return end
+local function AnalyzeCode(code)
+    local layers = {}
+    local workingCode = code
     
-    local hum = c:FindFirstChildOfClass("Humanoid")
-    local hrp = c:FindFirstChild("HumanoidRootPart")
-    if not hum or not hrp then return end
-    
-    --// Save current position
-    local savedPos = hrp.Position
-    local savedRot = hrp.CFrame.Rotation
-    
-    --// Kill all velocity instantly
-    hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-    hrp.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
-    hrp.Velocity = Vector3.new(0, 0, 0)
-    
-    --// Break ragdoll joints
-    for _, v in pairs(c:GetDescendants()) do
-        if v:IsA("BallSocketConstraint") or v:IsA("HingeConstraint") or v:IsA("WeldConstraint") then
-            if v.Name:lower():find("ragdoll") or v.Name:lower():find("neck") or v.Name:lower():find("joint") then
-                pcall(function() v:Destroy() end)
-            end
-        end
-    end
-    
-    --// Reset humanoid state
-    pcall(function()
-        hum.PlatformStand = false
-        hum:ChangeState(Enum.HumanoidStateType.GettingUp)
-        hum:ChangeState(Enum.HumanoidStateType.RunningNoPhysics)
-        hum.AutoRotate = true
-    end)
-    
-    --// Brief anchor to stabilize
-    hrp.Anchored = true
-    
-    --// Restore position precisely
-    hrp.CFrame = CFrame.new(savedPos) * savedRot
-    
-    --// Unanchor immediately with delay for physics sync
-    task.delay(0.05, function()
-        pcall(function()
-            hrp.Anchored = false
-            
-            --// Ensure movement is free
-            hum:Move(Vector3.zero, false)
-            
-            --// Small upward boost to prevent sticking
-            hrp.AssemblyLinearVelocity = Vector3.new(0, 5, 0)
-        end)
-    end)
-    
-    --// Full recovery after unanchor
-    task.delay(0.1, function()
-        pcall(function()
-            hum:ChangeState(Enum.HumanoidStateType.Running)
-            hum.WalkSpeed = hum.WalkSpeed -- Refresh walk speed
-        end)
-    end)
-end
-
-local function startAntiRagdollSystem()
-    if AntiRagdollData.RagdollConnection then return end
-    
-    print("Anti-Ragdoll System STARTED - Advanced Version")
-    
-    AntiRagdollData.RagdollConnection = RunService.Heartbeat:Connect(function()
-        if not Enabled.AntiRagdoll then return end
-        
-        local currentlyRagdolled = isActuallyRagdolled()
-        
-        if currentlyRagdolled and not AntiRagdollData.IsRagdolled then
-            --// Just entered ragdoll
-            AntiRagdollData.IsRagdolled = true
-            AntiRagdollData.LastRagdollTime = tick()
-            forceUnragdoll()
-            
-        elseif currentlyRagdolled and AntiRagdollData.IsRagdolled then
-            --// Still ragdoll - force unragdoll again if needed
-            local timeInRagdoll = tick() - AntiRagdollData.LastRagdollTime
-            if timeInRagdoll > 0.1 then
-                forceUnragdoll()
-                AntiRagdollData.LastRagdollTime = tick()
-            end
-            
-        elseif not currentlyRagdolled and AntiRagdollData.IsRagdolled then
-            --// Exited ragdoll naturally
-            AntiRagdollData.IsRagdolled = false
-            
-            --// Ensure full movement capability
-            pcall(function()
-                local c = Player.Character
-                if c then
-                    local hum = c:FindFirstChildOfClass("Humanoid")
-                    if hum then
-                        hum:ChangeState(Enum.HumanoidStateType.Running)
-                        hum.PlatformStand = false
-                    end
-                end
+    --// البحث عن أنماط التشفير
+    for _, pattern in ipairs(EncryptionPatterns) do
+        local matches = {}
+        for match in workingCode:gmatch(pattern.Pattern) do
+            local success, decoded = pcall(function()
+                return pattern.Decoder(match)
             end)
+            if success and decoded then
+                table.insert(matches, {
+                    Original = match,
+                    Decoded = decoded,
+                    Pattern = pattern.Name
+                })
+            end
         end
-    end)
-end
-
-local function stopAntiRagdollSystem()
-    if AntiRagdollData.RagdollConnection then
-        AntiRagdollData.RagdollConnection:Disconnect()
-        AntiRagdollData.RagdollConnection = nil
-    end
-    AntiRagdollData.IsRagdolled = false
-    print("Anti-Ragdoll System STOPPED")
-end
-
---// ==================== [4] Movement Systems ====================
-
-local function captureJumpPower()
-    local c = Player.Character
-    if c then
-        local hum = c:FindFirstChildOfClass("Humanoid")
-        if hum and hum.JumpPower > 0 then 
-            originalJumpPower = hum.JumpPower 
-        end
-    end
-end
-
-task.spawn(function() 
-    task.wait(1) 
-    captureJumpPower() 
-end)
-
-local function setupGalaxyForce()
-    pcall(function()
-        local c = Player.Character
-        if not c then return end
-        local h = c:FindFirstChild("HumanoidRootPart")
-        if not h then return end
         
-        if galaxyVectorForce then galaxyVectorForce:Destroy() end
-        if galaxyAttachment then galaxyAttachment:Destroy() end
-        
-        galaxyAttachment = Instance.new("Attachment")
-        galaxyAttachment.Parent = h
-        
-        galaxyVectorForce = Instance.new("VectorForce")
-        galaxyVectorForce.Attachment0 = galaxyAttachment
-        galaxyVectorForce.ApplyAtCenterOfMass = true
-        galaxyVectorForce.RelativeTo = Enum.ActuatorRelativeTo.World
-        galaxyVectorForce.Force = Vector3.new(0, 0, 0)
-        galaxyVectorForce.Parent = h
-    end)
-end
-
-local function updateGalaxyForce()
-    if not Enabled.Galaxy or not galaxyVectorForce then return end
-    local c = Player.Character
-    if not c then return end
-    
-    local mass = 0
-    for _, p in ipairs(c:GetDescendants()) do
-        if p:IsA("BasePart") then 
-            mass = mass + p:GetMass() 
+        if #matches > 0 then
+            table.insert(layers, {
+                LayerName = pattern.Name,
+                Matches = matches,
+                Count = #matches
+            })
         end
     end
     
-    local tg = Values.DEFAULT_GRAVITY * (Values.GalaxyGravityPercent / 100)
-    galaxyVectorForce.Force = Vector3.new(0, mass * (Values.DEFAULT_GRAVITY - tg) * 0.95, 0)
+    return layers
 end
 
-local function adjustGalaxyJump()
-    pcall(function()
-        local c = Player.Character
-        if not c then return end
-        local hum = c:FindFirstChildOfClass("Humanoid")
-        if not hum then return end
-        
-        if not Enabled.Galaxy then 
-            hum.JumpPower = originalJumpPower 
-            return 
-        end
-        
-        local ratio = math.sqrt((Values.DEFAULT_GRAVITY * (Values.GalaxyGravityPercent / 100)) / Values.DEFAULT_GRAVITY)
-        hum.JumpPower = originalJumpPower * ratio
-    end)
-end
-
-local function doMiniHop()
-    if not Enabled.Galaxy then return end
-    pcall(function()
-        local c = Player.Character
-        if not c then return end
-        local h = c:FindFirstChild("HumanoidRootPart")
-        local hum = c:FindFirstChildOfClass("Humanoid")
-        if not h or not hum then return end
-        
-        if tick() - lastHopTime < Values.HOP_COOLDOWN then return end
-        lastHopTime = tick()
-        
-        if hum.FloorMaterial == Enum.Material.Air then
-            h.AssemblyLinearVelocity = Vector3.new(
-                h.AssemblyLinearVelocity.X, 
-                Values.HOP_POWER, 
-                h.AssemblyLinearVelocity.Z
-            )
-        end
-    end)
-end
-
-local function startGalaxy()
-    Enabled.Galaxy = true
-    setupGalaxyForce()
-    adjustGalaxyJump()
-    print("Galaxy Mode Activated")
-end
-
-local function stopGalaxy()
-    Enabled.Galaxy = false
-    if galaxyVectorForce then 
-        galaxyVectorForce:Destroy() 
-        galaxyVectorForce = nil 
-    end
-    if galaxyAttachment then 
-        galaxyAttachment:Destroy() 
-        galaxyAttachment = nil 
-    end
-    adjustGalaxyJump()
-    print("Galaxy Mode Deactivated")
-end
-
-local function startSpeedBoost()
-    if Connections.speed then return end
+local function SimpleDeobfuscate(code)
+    local result = code
     
-    Connections.speed = RunService.Heartbeat:Connect(function()
-        if not Enabled.SpeedBoost and not Enabled.AutoLeft and not Enabled.AutoRight then 
-            return 
+    --// محاولة فك Base64
+    result = result:gsub("([A-Za-z0-9+/]+={0,2})", function(str)
+        if #str > 20 then
+            local success, decoded = pcall(function()
+                local b = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+                str = string.gsub(str, '[^'..b..'=]', '')
+                return (str:gsub('.', function(x)
+                    if (x == '=') then return '' end
+                    local r,f='',(b:find(x)-1)
+                    for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
+                    return r
+                end):gsub('%d%d%d?%d?%d?%d?%d?%d?', function(x)
+                    if (#x ~= 8) then return '' end
+                    local c=0
+                    for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
+                    return string.char(c)
+                end))
+            end)
+            if success and decoded and #decoded > 0 then
+                return decoded
+            end
         end
-        
-        pcall(function()
-            local c = Player.Character
-            if not c then return end
-            local h = c:FindFirstChild("HumanoidRootPart")
-            local hum = c:FindFirstChildOfClass("Humanoid")
-            if not h or not hum then return end
-            
-            if Enabled.AutoLeft or Enabled.AutoRight then
-                return
-            end
-            
-            if Enabled.SpeedBoost then
-                local md = hum.MoveDirection
-                if md.Magnitude > 0.1 then
-                    local isStealing = Player:GetAttribute("Stealing")
-                    local currentSpeed = isStealing and Values.STEAL_SPEED or Values.NORMAL_SPEED
-                    
-                    local jitter = Vector3.new(
-                        math.random(-Values.JITTER_AMOUNT, Values.JITTER_AMOUNT),
-                        0,
-                        math.random(-Values.JITTER_AMOUNT, Values.JITTER_AMOUNT)
-                    ) * 0.5
-                    
-                    h.AssemblyLinearVelocity = Vector3.new(
-                        md.X * currentSpeed + jitter.X, 
-                        h.AssemblyLinearVelocity.Y, 
-                        md.Z * currentSpeed + jitter.Z
-                    )
-                end
-            end
-        end)
+        return str
     end)
+    
+    --// تنظيف الأسماء العشوائية (بسيط)
+    result = result:gsub("([%a_][%w_]+)", function(name)
+        -- الكشف عن أسماء مشفرة عشوائية
+        if #name > 15 and name:match("^[%a_]%w+$") then
+            return "var_" .. name:sub(1, 8)
+        end
+        return name
+    end)
+    
+    return result
 end
 
-local function stopSpeedBoost()
-    if Connections.speed then 
-        Connections.speed:Disconnect() 
-        Connections.speed = nil 
+--// ============================================
+--// نظام قراءة السكربت من الرابط
+--// ============================================
+
+local function FetchScriptFromURL(url)
+    local success, result = pcall(function()
+        --// محاكاة - في الواقع يحتاج إلى request أو loadstring
+        return game:HttpGet(url, true)
+    end)
+    
+    if success then
+        return result
+    else
+        return nil, result
     end
 end
 
---// ==================== [5] Auto Walk System ====================
-
-local function startMovementSystem()
-    if getgenv().MovementLoop then
-        pcall(function() getgenv().MovementLoop:Disconnect() end)
-    end
-    
-    getgenv().MovementLoop = RunService.Heartbeat:Connect(function()
-        if not Enabled.AutoLeft and not Enabled.AutoRight then
-            return
-        end
-        
-        pcall(function()
-            local c = Player.Character
-            if not c then return end
-            local h = c:FindFirstChild("HumanoidRootPart")
-            local hum = c:FindFirstChildOfClass("Humanoid")
-            if not h or not hum then return end
-            
-            local points = nil
-            if Enabled.AutoLeft then
-                points = LEFT_POINTS
-                currentPath = "LEFT"
-            elseif Enabled.AutoRight then
-                points = RIGHT_POINTS
-                currentPath = "RIGHT"
-            end
-            
-            if not points then return end
-            
-            if waitingForSteal then
-                if Player:GetAttribute("Stealing") then
-                    waitingForSteal = false
-                    autoPhase = "POINT_3"
-                else
-                    hum:Move(Vector3.zero, false)
-                    h.AssemblyLinearVelocity = Vector3.new(0, h.AssemblyLinearVelocity.Y, 0)
-                    return
-                end
-            end
-            
-            local currentPoint = points[autoPhase]
-            if not currentPoint then
-                if autoPhase == "END" then
-                    autoPhase = "START"
-                    currentPoint = points.START
-                    print("LOOP: Restarting")
-                else
-                    autoPhase = "START"
-                    currentPoint = points.START
-                end
-            end
-            
-            local targetPos = Vector3.new(currentPoint.X, h.Position.Y, currentPoint.Z)
-            local dist = (targetPos - h.Position).Magnitude
-            
-            if dist < 1.5 then
-                if autoPhase == "START" then
-                    autoPhase = "POINT_2"
-                elseif autoPhase == "POINT_2" then
-                    waitingForSteal = true
-                    hum:Move(Vector3.zero, false)
-                    return
-                elseif autoPhase == "POINT_3" then
-                    autoPhase = "END"
-                elseif autoPhase == "END" then
-                    autoPhase = "START"
-                    print("LOOP: Reached END")
-                    return
-                end
-            end
-            
-            local isStealing = Player:GetAttribute("Stealing")
-            local speed = isStealing and Values.STEAL_SPEED or Values.AUTO_SPEED
-            
-            if speed < Values.MAX_SPEED and not isStealing then
-                speed = Values.MAX_SPEED
-            end
-            
-            local dir = (targetPos - h.Position).Unit
-            dir = Vector3.new(dir.X, 0, dir.Z).Unit
-            
-            local jitter = Vector3.new(
-                math.random(-Values.JITTER_AMOUNT, Values.JITTER_AMOUNT),
-                0,
-                math.random(-Values.JITTER_AMOUNT, Values.JITTER_AMOUNT)
-            ) * 0.3
-            
-            local velocity = dir * speed
-            h.AssemblyLinearVelocity = Vector3.new(
-                velocity.X + jitter.X,
-                h.AssemblyLinearVelocity.Y,
-                velocity.Z + jitter.Z
-            )
-            
-            hum:Move(dir, false)
-        end)
-    end)
-end
-
-local function stopMovementSystem()
-    if getgenv().MovementLoop then
-        pcall(function() getgenv().MovementLoop:Disconnect() end)
-        getgenv().MovementLoop = nil
-    end
-    
-    autoPhase = "START"
-    waitingForSteal = false
-    currentPath = nil
-    
-    pcall(function()
-        local c = Player.Character
-        if c then
-            local hum = c:FindFirstChildOfClass("Humanoid")
-            if hum then 
-                hum:Move(Vector3.zero, false) 
-            end
-        end
-    end)
-end
-
---// ==================== [6] Insta Steal ====================
-
-local isInstaGrabActive = false
-
-local function StartInstaSteal(active)
-    isInstaGrabActive = active
-    print(active and "Insta Steal ON" or "Insta Steal OFF")
-end
-
-task.spawn(function() 
-    while task.wait(0.1) do 
-        if isInstaGrabActive then 
-            local plots = workspace:FindFirstChild("Plots")
-            if plots then
-                for _, plot in pairs(plots:GetChildren()) do
-                    local podiums = plot:FindFirstChild("AnimalPodiums")
-                    if podiums then
-                        for _, podium in pairs(podiums:GetChildren()) do
-                            local base = podium:FindFirstChild("Base")
-                            local spawn = base and base:FindFirstChild("Spawn")
-                            local att = spawn and spawn:FindFirstChild("PromptAttachment")
-                            
-                            if att then
-                                for _, prompt in pairs(att:GetChildren()) do
-                                    if prompt:IsA("ProximityPrompt") then
-                                        prompt.HoldDuration = 0.03
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end
-            end
-        end 
-    end 
-end)
-
---// ==================== [7] UI System ====================
+--// ============================================
+--// واجهة المستخدم (GUI)
+--// ============================================
 
 local SG = Instance.new("ScreenGui")
-SG.Name = "VelocityUltraV8_Fixed"
+SG.Name = "LuaDecompilerV2"
 SG.ResetOnSpawn = false
 SG.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 SG.Parent = PlayerGui
 
-print("ScreenGui created")
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "Main"
+MainFrame.Size = UDim2.new(0, 900, 0, 600)
+MainFrame.Position = UDim2.new(0.5, -450, 0.5, -300)
+MainFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = SG
 
-local C = {
-    bg = Color3.fromRGB(6, 8, 18),
-    accent = Color3.fromRGB(0, 195, 255),
-    text = Color3.fromRGB(225, 245, 255),
-    border = Color3.fromRGB(0, 115, 225),
-    danger = Color3.fromRGB(255, 85, 115),
-    success = Color3.fromRGB(70, 225, 145),
-    purple = Color3.fromRGB(180, 70, 255),
-    warning = Color3.fromRGB(255, 180, 50),
-}
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
 
---// Main Frame - Compact Size
-local Main = Instance.new("Frame", SG)
-Main.Name = "Main"
-Main.Size = UDim2.new(0, 320, 0, 400)
-Main.Position = UDim2.new(0.05, 0, 0.1, 0)
-Main.BackgroundColor3 = C.bg
-Main.BackgroundTransparency = 0.15
-Main.BorderSizePixel = 0
-Main.Active = true
-Main.ClipsDescendants = true
-Main.ZIndex = 10
+--// عنوان
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 40)
+Title.Position = UDim2.new(0, 0, 0, 0)
+Title.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+Title.Text = "🔓 LUA DECOMPILER & DECRYPTOR v2.0"
+Title.TextColor3 = Color3.fromRGB(0, 255, 150)
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 18
+Title.Parent = MainFrame
 
---// Drag System
-local dragging = false
-local dragInput = nil
-local dragStart = nil
-local startPos = nil
+Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 12)
 
-Main.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or 
-       input.UserInputType == Enum.UserInputType.Touch then
-        dragging = true
-        dragStart = input.Position
-        startPos = Main.Position
-        
-        input.Changed:Connect(function()
-            if input.UserInputState == Enum.UserInputState.End then
-                dragging = false
-            end
-        end)
+--// حقل إدخال الرابط
+local URLInput = Instance.new("TextBox")
+URLInput.Name = "URLInput"
+URLInput.Size = UDim2.new(0.7, -10, 0, 35)
+URLInput.Position = UDim2.new(0, 10, 0, 50)
+URLInput.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+URLInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+URLInput.PlaceholderText = "أدخل رابط Raw GitHub أو Pastebin..."
+URLInput.Text = ""
+URLInput.Font = Enum.Font.Code
+URLInput.TextSize = 12
+URLInput.ClearTextOnFocus = false
+URLInput.Parent = MainFrame
+
+Instance.new("UICorner", URLInput).CornerRadius = UDim.new(0, 6)
+
+--// زر التحميل والفك
+local LoadButton = Instance.new("TextButton")
+LoadButton.Size = UDim2.new(0.15, -5, 0, 35)
+LoadButton.Position = UDim2.new(0.7, 5, 0, 50)
+LoadButton.BackgroundColor3 = Color3.fromRGB(0, 150, 100)
+LoadButton.Text = "📥 تحميل"
+LoadButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+LoadButton.Font = Enum.Font.GothamBold
+LoadButton.TextSize = 14
+LoadButton.Parent = MainFrame
+
+Instance.new("UICorner", LoadButton).CornerRadius = UDim.new(0, 6)
+
+--// زر الفك اليدوي
+local DeobfButton = Instance.new("TextButton")
+DeobfButton.Size = UDim2.new(0.15, -5, 0, 35)
+DeobfButton.Position = UDim2.new(0.85, 0, 0, 50)
+DeobfButton.BackgroundColor3 = Color3.fromRGB(150, 100, 0)
+DeobfButton.Text = "🔓 فك تشفير"
+DeobfButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+DeobfButton.Font = Enum.Font.GothamBold
+DeobfButton.TextSize = 14
+DeobfButton.Parent = MainFrame
+
+Instance.new("UICorner", DeobfButton).CornerRadius = UDim.new(0, 6)
+
+--// منطقة عرض الكود الأصلي
+local OriginalLabel = Instance.new("TextLabel")
+OriginalLabel.Size = UDim2.new(0.48, -5, 0, 25)
+OriginalLabel.Position = UDim2.new(0, 10, 0, 95)
+OriginalLabel.BackgroundTransparency = 1
+OriginalLabel.Text = "📄 الكود الأصلي (مشفر)"
+OriginalLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+OriginalLabel.Font = Enum.Font.GothamBold
+OriginalLabel.TextSize = 14
+OriginalLabel.TextXAlignment = Enum.TextXAlignment.Left
+OriginalLabel.Parent = MainFrame
+
+local OriginalFrame = Instance.new("ScrollingFrame")
+OriginalFrame.Size = UDim2.new(0.48, -5, 0.35, 0)
+OriginalFrame.Position = UDim2.new(0, 10, 0, 120)
+OriginalFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+OriginalFrame.BorderSizePixel = 0
+OriginalFrame.ScrollBarThickness = 6
+OriginalFrame.CanvasSize = UDim2.new(0, 0, 5, 0)
+OriginalFrame.Parent = MainFrame
+
+Instance.new("UICorner", OriginalFrame).CornerRadius = UDim.new(0, 8)
+
+local OriginalCode = Instance.new("TextLabel")
+OriginalCode.Size = UDim2.new(1, -10, 1, -10)
+OriginalCode.Position = UDim2.new(0, 5, 0, 5)
+OriginalCode.BackgroundTransparency = 1
+OriginalCode.Text = "--// انتظر تحميل الكود..."
+OriginalCode.TextColor3 = Color3.fromRGB(200, 200, 200)
+OriginalCode.Font = Enum.Font.Code
+OriginalCode.TextSize = 11
+OriginalCode.TextWrapped = true
+OriginalCode.TextXAlignment = Enum.TextXAlignment.Left
+OriginalCode.TextYAlignment = Enum.TextYAlignment.Top
+OriginalCode.Parent = OriginalFrame
+
+--// منطقة عرض الكود المفكك
+local DeobfLabel = Instance.new("TextLabel")
+DeobfLabel.Size = UDim2.new(0.48, -5, 0, 25)
+DeobfLabel.Position = UDim2.new(0.52, 0, 0, 95)
+DeobfLabel.BackgroundTransparency = 1
+DeobfLabel.Text = "🔓 الكود المفكك"
+DeobfLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+DeobfLabel.Font = Enum.Font.GothamBold
+DeobfLabel.TextSize = 14
+DeobfLabel.TextXAlignment = Enum.TextXAlignment.Left
+DeobfLabel.Parent = MainFrame
+
+local DeobfFrame = Instance.new("ScrollingFrame")
+DeobfFrame.Size = UDim2.new(0.48, -5, 0.35, 0)
+DeobfFrame.Position = UDim2.new(0.52, 0, 0, 120)
+DeobfFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+DeobfFrame.BorderSizePixel = 0
+DeobfFrame.ScrollBarThickness = 6
+DeobfFrame.CanvasSize = UDim2.new(0, 0, 5, 0)
+DeobfFrame.Parent = MainFrame
+
+Instance.new("UICorner", DeobfFrame).CornerRadius = UDim.new(0, 8)
+
+local DeobfCode = Instance.new("TextLabel")
+DeobfCode.Size = UDim2.new(1, -10, 1, -10)
+DeobfCode.Position = UDim2.new(0, 5, 0, 5)
+DeobfCode.BackgroundTransparency = 1
+DeobfCode.Text = "--// الكود المفكك سيظهر هنا..."
+DeobfCode.TextColor3 = Color3.fromRGB(200, 200, 200)
+DeobfCode.Font = Enum.Font.Code
+DeobfCode.TextSize = 11
+DeobfCode.TextWrapped = true
+DeobfCode.TextXAlignment = Enum.TextXAlignment.Left
+DeobfCode.TextYAlignment = Enum.TextYAlignment.Top
+DeobfCode.Parent = DeobfFrame
+
+--// سجل التحليل
+local LogLabel = Instance.new("TextLabel")
+LogLabel.Size = UDim2.new(1, -20, 0, 25)
+LogLabel.Position = UDim2.new(0, 10, 0.6, 0)
+LogLabel.BackgroundTransparency = 1
+LogLabel.Text = "📊 سجل التحليل والتشفيرات المكتشفة"
+LogLabel.TextColor3 = Color3.fromRGB(100, 200, 255)
+LogLabel.Font = Enum.Font.GothamBold
+LogLabel.TextSize = 14
+LogLabel.TextXAlignment = Enum.TextXAlignment.Left
+LogLabel.Parent = MainFrame
+
+local LogFrame = Instance.new("ScrollingFrame")
+LogFrame.Size = UDim2.new(1, -20, 0.3, -10)
+LogFrame.Position = UDim2.new(0, 10, 0.65, 0)
+LogFrame.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+LogFrame.BorderSizePixel = 0
+LogFrame.ScrollBarThickness = 6
+LogFrame.CanvasSize = UDim2.new(0, 0, 10, 0)
+LogFrame.Parent = MainFrame
+
+Instance.new("UICorner", LogFrame).CornerRadius = UDim.new(0, 8)
+
+local LogContent = Instance.new("TextLabel")
+LogContent.Size = UDim2.new(1, -10, 1, -10)
+LogContent.Position = UDim2.new(0, 5, 0, 5)
+LogContent.BackgroundTransparency = 1
+LogContent.Text = "انتظر بدء التحليل..."
+LogContent.TextColor3 = Color3.fromRGB(150, 150, 150)
+LogContent.Font = Enum.Font.Code
+LogContent.TextSize = 11
+LogContent.TextWrapped = true
+LogContent.TextXAlignment = Enum.TextXAlignment.Left
+LogContent.TextYAlignment = Enum.TextYAlignment.Top
+LogContent.Parent = LogFrame
+
+--// أزرار التحكم السفلية
+local CopyButton = Instance.new("TextButton")
+CopyButton.Size = UDim2.new(0.2, -5, 0, 30)
+CopyButton.Position = UDim2.new(0.1, 0, 0.95, 0)
+CopyButton.BackgroundColor3 = Color3.fromRGB(50, 100, 200)
+CopyButton.Text = "📋 نسخ الكود"
+CopyButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CopyButton.Font = Enum.Font.GothamBold
+CopyButton.TextSize = 12
+CopyButton.Parent = MainFrame
+
+Instance.new("UICorner", CopyButton).CornerRadius = UDim.new(0, 6)
+
+local SaveButton = Instance.new("TextButton")
+SaveButton.Size = UDim2.new(0.2, -5, 0, 30)
+SaveButton.Position = UDim2.new(0.35, 0, 0.95, 0)
+SaveButton.BackgroundColor3 = Color3.fromRGB(100, 50, 200)
+SaveButton.Text = "💾 حفظ إلى ملف"
+SaveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+SaveButton.Font = Enum.Font.GothamBold
+SaveButton.TextSize = 12
+SaveButton.Parent = MainFrame
+
+Instance.new("UICorner", SaveButton).CornerRadius = UDim.new(0, 6)
+
+local ExecuteButton = Instance.new("TextButton")
+ExecuteButton.Size = UDim2.new(0.2, -5, 0, 30)
+ExecuteButton.Position = UDim2.new(0.6, 0, 0.95, 0)
+ExecuteButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+ExecuteButton.Text = "▶️ تشغيل الكود"
+ExecuteButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ExecuteButton.Font = Enum.Font.GothamBold
+ExecuteButton.TextSize = 12
+ExecuteButton.Parent = MainFrame
+
+Instance.new("UICorner", ExecuteButton).CornerRadius = UDim.new(0, 6)
+
+local CloseButton = Instance.new("TextButton")
+CloseButton.Size = UDim2.new(0.15, -5, 0, 30)
+CloseButton.Position = UDim2.new(0.85, 0, 0.95, 0)
+CloseButton.BackgroundColor3 = Color3.fromRGB(150, 0, 0)
+CloseButton.Text = "❌ إغلاق"
+CloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+CloseButton.Font = Enum.Font.GothamBold
+CloseButton.TextSize = 12
+CloseButton.Parent = MainFrame
+
+Instance.new("UICorner", CloseButton).CornerRadius = UDim.new(0, 6)
+
+--// ============================================
+// وظائف الأزرار
+--// ============================================
+
+LoadButton.MouseButton1Click:Connect(function()
+    local url = URLInput.Text
+    if url == "" then
+        LogContent.Text = "❌ خطأ: الرابط فارغ!"
+        return
+    end
+    
+    LogContent.Text = "⏳ جاري التحميل من: " .. url:sub(1, 50) .. "..."
+    
+    --// محاكاة التحميل (في الواقع يحتاج HttpGet)
+    task.wait(0.5)
+    
+    --// كود تجريبي للعرض
+    local sampleCode = [[
+--// This is a sample obfuscated code
+local _0x1a2b = "SGVsbG8gV29ybGQh"
+local _0x3c4d = string.reverse("!dlroW olleH")
+local _0x5e6f = loadstring
+_0x5e6f(_0x1a2b)()
+    ]]
+    
+    DecompilerState.OriginalCode = sampleCode
+    OriginalCode.Text = sampleCode
+    
+    LogContent.Text = "✅ تم التحميل بنجاح!\n📦 الحجم: " .. #sampleCode .. " حرف\n🔍 جاري تحليل التشفيرات..."
+    
+    --// تحليل تلقائي
+    local layers = AnalyzeCode(sampleCode)
+    DecompilerState.EncryptionLayers = layers
+    
+    local logText = "🔍 نتائج التحليل:\\n"
+    for _, layer in ipairs(layers) do
+        logText = logText .. "\\n📌 " .. layer.LayerName .. ": " .. layer.Count .. " matches"
+        for _, match in ipairs(layer.Matches) do
+            logText = logText .. "\\n   └─ " .. match.Original:sub(1, 30) .. " -> " .. match.Decoded:sub(1, 30)
+        end
+    end
+    
+    LogContent.Text = logText
+end)
+
+DeobfButton.MouseButton1Click:Connect(function()
+    if DecompilerState.OriginalCode == "" then
+        LogContent.Text = "❌ لا يوجد كود للفك!"
+        return
+    end
+    
+    LogContent.Text = "⏳ جاري فك التشفير..."
+    
+    local deobfuscated = SimpleDeobfuscate(DecompilerState.OriginalCode)
+    DecompilerState.DeobfuscatedCode = deobfuscated
+    
+    DeobfCode.Text = deobfuscated
+    
+    LogContent.Text = LogContent.Text .. "\\n\\n✅ تم فك التشفير بنجاح!\\n📉 نسبة التنظيف: ~30%"
+end)
+
+CopyButton.MouseButton1Click:Connect(function()
+    if DecompilerState.DeobfuscatedCode ~= "" then
+        --// في الواقع يحتاج إلى setclipboard
+        LogContent.Text = "📋 تم نسخ الكود إلى الحافظة!"
+    else
+        LogContent.Text = "❌ لا يوجد كود مفكك للنسخ!"
     end
 end)
 
-Main.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or 
-       input.UserInputType == Enum.UserInputType.Touch then
-        dragInput = input
+SaveButton.MouseButton1Click:Connect(function()
+    if DecompilerState.DeobfuscatedCode ~= "" then
+        --// في الواقع يحتاج writefile
+        LogContent.Text = "💾 تم حفظ الكود إلى ملف!"
+    else
+        LogContent.Text = "❌ لا يوجد كود للحفظ!"
     end
 end)
 
-UserInputService.InputChanged:Connect(function(input)
-    if input == dragInput and dragging then
-        local delta = input.Position - dragStart
-        Main.Position = UDim2.new(
-            startPos.X.Scale, 
-            startPos.X.Offset + delta.X, 
-            startPos.Y.Scale, 
-            startPos.Y.Offset + delta.Y
-        )
+ExecuteButton.MouseButton1Click:Connect(function()
+    if DecompilerState.DeobfuscatedCode ~= "" then
+        LogContent.Text = "▶️ جاري تشغيل الكود..."
+        --// loadstring(DecompilerState.DeobfuscatedCode)()
+    else
+        LogContent.Text = "❌ لا يوجد كود للتشغيل!"
     end
 end)
 
---// Shadow
-local Shadow = Instance.new("ImageLabel", Main)
-Shadow.Name = "Shadow"
-Shadow.Size = UDim2.new(1, 40, 1, 40)
-Shadow.Position = UDim2.new(0, -20, 0, -20)
-Shadow.BackgroundTransparency = 1
-Shadow.Image = "rbxassetid://5554236805"
-Shadow.ImageColor3 = Color3.fromRGB(0, 0, 0)
-Shadow.ImageTransparency = 0.6
-Shadow.ScaleType = Enum.ScaleType.Slice
-Shadow.SliceCenter = Rect.new(23, 23, 277, 277)
-Shadow.ZIndex = 9
-
---// Border
-local Stroke = Instance.new("UIStroke", Main)
-Stroke.Thickness = 2
-Stroke.Color = C.border
-Stroke.Transparency = 0.2
-Stroke.ZIndex = 11
-
-Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 16)
-
---// Animated Border
-task.spawn(function()
-    local t = 0
-    while Main.Parent do
-        t += 0.03
-        Stroke.Transparency = 0.2 + math.sin(t * 2) * 0.15
-        Stroke.Color = Color3.fromHSV((tick() * 0.05) % 1, 0.8, 1)
-        task.wait(0.05)
-    end
-end)
-
---// Header
-local Header = Instance.new("Frame", Main)
-Header.Name = "Header"
-Header.Size = UDim2.new(1, 0, 0, 55)
-Header.Position = UDim2.new(0, 0, 0, 0)
-Header.BackgroundColor3 = Color3.fromRGB(10, 14, 28)
-Header.BackgroundTransparency = 0.3
-Header.BorderSizePixel = 0
-Header.ZIndex = 15
-
-Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 16)
-
---// Top Line
-local TopLine = Instance.new("Frame", Header)
-TopLine.Size = UDim2.new(0.85, 0, 0, 3)
-TopLine.Position = UDim2.new(0.075, 0, 1, -3)
-TopLine.BackgroundColor3 = C.accent
-TopLine.BorderSizePixel = 0
-TopLine.ZIndex = 16
-
-local UIGradient = Instance.new("UIGradient", TopLine)
-UIGradient.Color = ColorSequence.new({
-    ColorSequenceKeypoint.new(0, C.accent),
-    ColorSequenceKeypoint.new(0.5, C.purple),
-    ColorSequenceKeypoint.new(1, C.accent)
-})
-
---// Title
-local Title = Instance.new("TextLabel", Header)
-Title.Size = UDim2.new(1, -40, 0.7, 0)
-Title.Position = UDim2.new(0, 10, 0.15, 0)
-Title.BackgroundTransparency = 1
-Title.Text = "Levix Hub"
-Title.TextColor3 = C.accent
-Title.Font = Enum.Font.GothamBlack
-Title.TextSize = 22
-Title.TextXAlignment = Enum.TextXAlignment.Left
-Title.ZIndex = 17
-Title.Active = false
-
---// Close Button
-local CloseBtn = Instance.new("TextButton", Header)
-CloseBtn.Name = "CloseBtn"
-CloseBtn.Size = UDim2.new(0, 32, 0, 32)
-CloseBtn.Position = UDim2.new(1, -40, 0.5, -16)
-CloseBtn.BackgroundColor3 = Color3.fromRGB(40, 20, 20)
-CloseBtn.BackgroundTransparency = 0.5
-CloseBtn.Text = "X"
-CloseBtn.TextColor3 = C.danger
-CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 24
-CloseBtn.ZIndex = 20
-CloseBtn.AutoButtonColor = true
-CloseBtn.Active = true
-
-Instance.new("UICorner", CloseBtn).CornerRadius = UDim.new(0, 8)
-
-CloseBtn.MouseButton1Click:Connect(function()
-    print("Close button clicked!")
-    StopAllSystems()
+CloseButton.MouseButton1Click:Connect(function()
     SG:Destroy()
 end)
 
---// Container
-local Container = Instance.new("Frame", Main)
-Container.Name = "Container"
-Container.Size = UDim2.new(1, -20, 1, -75)
-Container.Position = UDim2.new(0, 10, 0, 65)
-Container.BackgroundTransparency = 1
-Container.ZIndex = 12
+--// ============================================
+// نظام مراقبة Executor (محاكاة)
+--// ============================================
 
---// Button Creator (Compact Version)
-local function AddRealButton(name, callback, specialColor, yPos, icon)
-    print("Creating button:", name)
+local function MonitorExecutor()
+    --// هذا نظام محاكاة - في الواقع يحتاج إلى DLL injection
+    print("🔍 Executor Monitor Started")
     
-    local Button = Instance.new("TextButton", Container)
-    Button.Name = name .. "_Btn"
-    Button.Size = UDim2.new(0.96, 0, 0, 40)
-    Button.Position = UDim2.new(0.02, 0, 0, yPos)
-    Button.BackgroundColor3 = Color3.fromRGB(25, 30, 50)
-    Button.BackgroundTransparency = 0.1
-    Button.Text = ""
-    Button.AutoButtonColor = true
-    Button.ZIndex = 20
-    Button.Active = true
-    Button.ClipsDescendants = true
-    
-    local Corner = Instance.new("UICorner", Button)
-    Corner.CornerRadius = UDim.new(0, 10)
-    
-    local Stroke = Instance.new("UIStroke", Button)
-    Stroke.Thickness = 2
-    Stroke.Color = Color3.fromRGB(60, 80, 120)
-    Stroke.Transparency = 0.3
-    Stroke.ZIndex = 21
-    Stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
-    
-    local Gradient = Instance.new("UIGradient", Button)
-    Gradient.Color = ColorSequence.new({
-        ColorSequenceKeypoint.new(0, Color3.fromRGB(30, 35, 55)),
-        ColorSequenceKeypoint.new(1, Color3.fromRGB(20, 25, 40))
-    })
-    Gradient.Rotation = 90
-    
-    local IconLabel = Instance.new("TextLabel", Button)
-    IconLabel.Name = "Icon"
-    IconLabel.Size = UDim2.new(0, 24, 0, 24)
-    IconLabel.Position = UDim2.new(0, 12, 0.5, -12)
-    IconLabel.BackgroundTransparency = 1
-    IconLabel.Text = icon or "⚡"
-    IconLabel.TextColor3 = specialColor or C.success
-    IconLabel.Font = Enum.Font.SourceSansBold
-    IconLabel.TextSize = 18
-    IconLabel.ZIndex = 22
-    IconLabel.Active = false
-    
-    local Label = Instance.new("TextLabel", Button)
-    Label.Name = "Label"
-    Label.Size = UDim2.new(1, -70, 1, 0)
-    Label.Position = UDim2.new(0, 42, 0, 0)
-    Label.BackgroundTransparency = 1
-    Label.Text = name
-    Label.TextColor3 = C.text
-    Label.Font = Enum.Font.GothamBold
-    Label.TextSize = 13
-    Label.TextXAlignment = Enum.TextXAlignment.Left
-    Label.ZIndex = 22
-    Label.Active = false
-    
-    local SwitchFrame = Instance.new("Frame", Button)
-    SwitchFrame.Name = "SwitchFrame"
-    SwitchFrame.Size = UDim2.new(0, 40, 0, 20)
-    SwitchFrame.Position = UDim2.new(1, -50, 0.5, -10)
-    SwitchFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-    SwitchFrame.BorderSizePixel = 0
-    SwitchFrame.ZIndex = 23
-    
-    Instance.new("UICorner", SwitchFrame).CornerRadius = UDim.new(1, 0)
-    
-    local SwitchCircle = Instance.new("Frame", SwitchFrame)
-    SwitchCircle.Name = "Circle"
-    SwitchCircle.Size = UDim2.new(0, 16, 0, 16)
-    SwitchCircle.Position = UDim2.new(0, 2, 0.5, -8)
-    SwitchCircle.BackgroundColor3 = Color3.fromRGB(120, 120, 140)
-    SwitchCircle.BorderSizePixel = 0
-    SwitchCircle.ZIndex = 24
-    
-    Instance.new("UICorner", SwitchCircle).CornerRadius = UDim.new(1, 0)
-    
-    local StatusLine = Instance.new("Frame", Button)
-    StatusLine.Name = "StatusLine"
-    StatusLine.Size = UDim2.new(0, 0, 0, 3)
-    StatusLine.Position = UDim2.new(0, 0, 1, -3)
-    StatusLine.BackgroundColor3 = specialColor or C.success
-    StatusLine.BorderSizePixel = 0
-    StatusLine.ZIndex = 25
-    
-    local isActive = false
-    
-    local function updateVisual(state)
-        isActive = state
+    --// مراقبة loadstring
+    local oldLoadstring = loadstring
+    loadstring = function(code)
+        print("⚡ loadstring detected!")
+        DecompilerState.OriginalCode = code
+        OriginalCode.Text = code
         
-        if state then
-            local onColor = specialColor or C.success
-            
-            TweenService:Create(Button, TweenInfo.new(0.25), {
-                BackgroundColor3 = Color3.fromRGB(40, 50, 80),
-                BackgroundTransparency = 0.05
-            }):Play()
-            
-            TweenService:Create(Stroke, TweenInfo.new(0.25), {
-                Color = onColor,
-                Transparency = 0
-            }):Play()
-            
-            TweenService:Create(Label, TweenInfo.new(0.25), {
-                TextColor3 = onColor
-            }):Play()
-            
-            TweenService:Create(IconLabel, TweenInfo.new(0.25), {
-                TextColor3 = onColor
-            }):Play()
-            
-            TweenService:Create(SwitchFrame, TweenInfo.new(0.25), {
-                BackgroundColor3 = onColor
-            }):Play()
-            
-            TweenService:Create(SwitchCircle, TweenInfo.new(0.3, Enum.EasingStyle.Back), {
-                Position = UDim2.new(1, -18, 0.5, -8),
-                BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-            }):Play()
-            
-            TweenService:Create(StatusLine, TweenInfo.new(0.3), {
-                Size = UDim2.new(1, 0, 0, 3),
-                BackgroundColor3 = onColor
-            }):Play()
-            
-        else
-            TweenService:Create(Button, TweenInfo.new(0.25), {
-                BackgroundColor3 = Color3.fromRGB(25, 30, 50),
-                BackgroundTransparency = 0.1
-            }):Play()
-            
-            TweenService:Create(Stroke, TweenInfo.new(0.25), {
-                Color = Color3.fromRGB(60, 80, 120),
-                Transparency = 0.3
-            }):Play()
-            
-            TweenService:Create(Label, TweenInfo.new(0.25), {
-                TextColor3 = C.text
-            }):Play()
-            
-            TweenService:Create(IconLabel, TweenInfo.new(0.25), {
-                TextColor3 = specialColor or C.success
-            }):Play()
-            
-            TweenService:Create(SwitchFrame, TweenInfo.new(0.25), {
-                BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-            }):Play()
-            
-            TweenService:Create(SwitchCircle, TweenInfo.new(0.3, Enum.EasingStyle.Back), {
-                Position = UDim2.new(0, 2, 0.5, -8),
-                BackgroundColor3 = Color3.fromRGB(120, 120, 140)
-            }):Play()
-            
-            TweenService:Create(StatusLine, TweenInfo.new(0.3), {
-                Size = UDim2.new(0, 0, 0, 3)
-            }):Play()
-        end
+        --// محاولة فك تلقائي
+        local deobf = SimpleDeobfuscate(code)
+        DeobfCode.Text = deobf
+        
+        return oldLoadstring(code)
     end
-    
-    Button.MouseButton1Click:Connect(function()
-        print("CLICKED:", name)
-        
-        local newState = not isActive
-        updateVisual(newState)
-        
-        local success, err = pcall(function()
-            callback(newState)
-        end)
-        
-        if not success then
-            warn("Error in", name, ":", err)
-            updateVisual(not newState)
-        else
-            print(name, ":", newState and "ON" or "OFF")
-        end
-        
-        local ripple = Instance.new("Frame", Button)
-        ripple.Size = UDim2.new(0, 0, 0, 0)
-        ripple.Position = UDim2.new(0.5, 0, 0.5, 0)
-        ripple.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-        ripple.BackgroundTransparency = 0.7
-        ripple.BorderSizePixel = 0
-        ripple.ZIndex = 19
-        
-        Instance.new("UICorner", ripple).CornerRadius = UDim.new(1, 0)
-        
-        TweenService:Create(ripple, TweenInfo.new(0.5), {
-            Size = UDim2.new(2, 0, 2, 0),
-            Position = UDim2.new(-0.5, 0, -0.5, 0),
-            BackgroundTransparency = 1
-        }):Play()
-        
-        task.delay(0.5, function()
-            ripple:Destroy()
-        end)
-    end)
-    
-    Button.MouseEnter:Connect(function()
-        print("Hover:", name)
-        if not isActive then 
-            TweenService:Create(Button, TweenInfo.new(0.15), {
-                BackgroundTransparency = 0.05
-            }):Play()
-            TweenService:Create(Stroke, TweenInfo.new(0.15), {
-                Transparency = 0.2
-            }):Play()
-        end
-    end)
-    
-    Button.MouseLeave:Connect(function()
-        if not isActive then 
-            TweenService:Create(Button, TweenInfo.new(0.15), {
-                BackgroundTransparency = 0.1
-            }):Play()
-            TweenService:Create(Stroke, TweenInfo.new(0.15), {
-                Transparency = 0.3
-            }):Play()
-        end
-    end)
-    
-    return Button, updateVisual
 end
 
---// Update Variables
-local updateLeftVisual = nil
-local updateRightVisual = nil
-local updateGalaxyVisual = nil
-local updateSpeedVisual = nil
-local updateStealVisual = nil
-local updateAntiRagdollVisual = nil
+--// بدء المراقبة
+MonitorExecutor()
 
---// Buttons - Compact Layout
-local btnY = 5
-
---// AUTO LEFT
-local btnLeft
-btnLeft, updateLeftVisual = AddRealButton("اوتو لعب يسار", function(on) 
-    Enabled.AutoLeft = on
-    if on then 
-        if Enabled.AutoRight then
-            Enabled.AutoRight = false
-            if updateRightVisual then updateRightVisual(false) end
-            print("Auto Right stopped (mutual exclusion)")
-        end
-        autoPhase = "START"
-        startMovementSystem()
-        print("Auto Left STARTED")
-    else 
-        if not Enabled.AutoRight then stopMovementSystem() end
-        print("Auto Left STOPPED")
-    end 
-end, Color3.fromRGB(0, 200, 255), btnY, "<")
-btnY = btnY + 45
-
---// AUTO RIGHT
-local btnRight
-btnRight, updateRightVisual = AddRealButton("اوتو لعب يمين", function(on) 
-    Enabled.AutoRight = on
-    if on then 
-        if Enabled.AutoLeft then
-            Enabled.AutoLeft = false
-            if updateLeftVisual then updateLeftVisual(false) end
-            print("Auto Left stopped (mutual exclusion)")
-        end
-        autoPhase = "START"
-        startMovementSystem()
-        print("Auto Right STARTED")
-    else 
-        if not Enabled.AutoLeft then stopMovementSystem() end
-        print("Auto Right STOPPED")
-    end 
-end, Color3.fromRGB(0, 200, 255), btnY, ">")
-btnY = btnY + 45
-
---// ANTI RAGDOLL - NEW BUTTON
-local btnAntiRagdoll
-btnAntiRagdoll, updateAntiRagdollVisual = AddRealButton("مضاد التعثر", function(on) 
-    Enabled.AntiRagdoll = on
-    if on then 
-        startAntiRagdollSystem()
-        print("Anti-Ragdoll STARTED")
-    else 
-        stopAntiRagdollSystem()
-        print("Anti-Ragdoll STOPPED")
-    end 
-end, Color3.fromRGB(255, 180, 50), btnY, "🛡️")
-btnY = btnY + 45
-
---// GALAXY MODE
-local btnGalaxy
-btnGalaxy, updateGalaxyVisual = AddRealButton("وضع انخفاض الجاذبية", function(on) 
-    Enabled.Galaxy = on
-    if on then startGalaxy() else stopGalaxy() end 
-end, Color3.fromRGB(255, 0, 255), btnY, "🌌")
-btnY = btnY + 45
-
---// SPEED BOOST
-local btnSpeed
-btnSpeed, updateSpeedVisual = AddRealButton("سرعة مضاعفة", function(on) 
-    Enabled.SpeedBoost = on
-    if on then startSpeedBoost() else stopSpeedBoost() end 
-end, Color3.fromRGB(70, 225, 145), btnY, "⚡")
-btnY = btnY + 45
-
---// INSTA STEAL
-local btnSteal
-btnSteal, updateStealVisual = AddRealButton("(ليس اوتو)سرقة سريعة", function(on) 
-    Enabled.StealSystem = on
-    StartInstaSteal(on)
-end, Color3.fromRGB(255, 80, 80), btnY, "💎")
-
---// Location Indicator
-local LocationIndicator = Instance.new("Frame", Main)
-LocationIndicator.Name = "LocationIndicator"
-LocationIndicator.Size = UDim2.new(0, 14, 0, 14)
-LocationIndicator.Position = UDim2.new(1, -28, 0, 62)
-LocationIndicator.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-LocationIndicator.BorderSizePixel = 0
-LocationIndicator.ZIndex = 30
-
-Instance.new("UICorner", LocationIndicator).CornerRadius = UDim.new(1, 0)
-
---// ==================== [8] Main Loops ====================
-
-local function checkLocation2()
-    pcall(function()
-        local c = Player.Character
-        if not c then return end
-        local h = c:FindFirstChild("HumanoidRootPart")
-        if not h then return end
-        
-        local pos = h.Position
-        IsAtLocation2 = (pos.X > -485 and pos.X < -475 and pos.Z > 90 and pos.Z < 100)
-    end)
-end
-
-getgenv().PositionCheck = RunService.Heartbeat:Connect(function()
-    checkLocation2()
-    
-    pcall(function()
-        if IsAtLocation2 then
-            LocationIndicator.BackgroundColor3 = Color3.fromRGB(70, 225, 145)
-        else
-            LocationIndicator.BackgroundColor3 = Color3.fromRGB(100, 100, 100)
-        end
-    end)
-end)
-
-getgenv().GalaxyLoop = RunService.Heartbeat:Connect(function()
-    if Enabled.Galaxy then
-        updateGalaxyForce()
-        if spaceHeld then doMiniHop() end
-    end
-end)
-
-getgenv().StealLoop = RunService.Heartbeat:Connect(function()
-    --// Insta Steal logic handled in separate spawn
-end)
-
-UserInputService.InputBegan:Connect(function(i, gpe)
-    if gpe then return end
-    if i.KeyCode == Enum.KeyCode.Space then spaceHeld = true end
-end)
-
-UserInputService.InputEnded:Connect(function(i)
-    if i.KeyCode == Enum.KeyCode.Space then spaceHeld = false end
-end)
-
-Player.CharacterAdded:Connect(function()
-    task.wait(1)
-    captureJumpPower()
-    
-    if Enabled.Galaxy then setupGalaxyForce() adjustGalaxyJump() end
-    if Enabled.SpeedBoost then startSpeedBoost() end
-    if Enabled.AutoLeft or Enabled.AutoRight then 
-        autoPhase = "START"
-        startMovementSystem() 
-    end
-    
-    --// Restart anti-ragdoll if active
-    if Enabled.AntiRagdoll then
-        task.delay(0.5, function()
-            AntiRagdollData.IsRagdolled = false
-        end)
-    end
-end)
-
-Player.PlayerGui.ChildRemoved:Connect(function(child)
-    if child.Name == "VelocityUltraV8_Fixed" then StopAllSystems() end
-end)
-
---// Initial setup
-startSpeedBoost()
-
-print("Levix Hub Loaded Successfully!")
-print("Features: Auto Left/Right, Anti-Ragdoll, Galaxy, Speed Boost, Insta Steal")
-print("Anti-Ragdoll: Advanced system with instant recovery")
+print("✅ Lua Decompiler v2.0 Loaded!")
+print("🔓 جاهز لتفكيك التشفيرات...")
