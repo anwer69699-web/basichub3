@@ -1,10 +1,12 @@
--- FR Desync + Insta Steal Auto - سرعة سرقة 15
+-- FR Ultra V3 - Desync + Insta Steal + Speed (معدل للهاتف والكمبيوتر)
 
 local Players = game:GetService("Players")
-local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
-local StarterGui = game:GetService("StarterGui")
 local UserInputService = game:GetService("UserInputService")
+local StarterGui = game:GetService("StarterGui")
+local TweenService = game:GetService("TweenService")
+
+local Player = Players.LocalPlayer
 
 -- إشعار
 local function Notify(title, text)
@@ -19,68 +21,66 @@ local function Notify(title, text)
 end
 
 -- تنظيف القديم
-if _G.FRDesyncLoop then _G.FRDesyncLoop:Disconnect() end
+if _G.FRUltraLoop then _G.FRUltraLoop:Disconnect() end
 if _G.FRStealLoop then _G.FRStealLoop:Disconnect() end
+if _G.FRGui then pcall(function() _G.FRGui:Destroy() end) end
 
--- إعدادات
-local NORMAL_SPEED = 40
-local STEAL_SPEED = 15  -- سرعة السرقة 15
-local UPDATE_DISTANCE = 30
-local SEND_INTERVAL = 0.06
+-- ═══════════════════════════════════════════════════════════════
+-- CONFIG (معدل)
+-- ═══════════════════════════════════════════════════════════════
+local CONFIG = {
+    BASE_SPEED = 53,        -- سرعة عادية
+    STEAL_SPEED = 15,       -- سرعة سرقة (أبطأ للتخفيف من اللاق)
+    MAX_SPEED = 50,
+    SEND_INTERVAL = 0.15,     -- أبطأ = أقل لاق
+    UPDATE_DISTANCE = 18,   -- يجدد الموقع عند 18 متر
+    MOVE_STEP = 4,          -- خطوة صغيرة للموقع الزائف (بطيئة)
+}
 
--- متغيرات
-local IsStealing = false
-local FakePosition = nil
-local LastSendTime = 0
+-- ═══════════════════════════════════════════════════════════════
+-- STATE
+-- ═══════════════════════════════════════════════════════════════
+local State = {
+    DesyncEnabled = false,
+    StealEnabled = false,
+    FakePosition = nil,
+    LastSendTime = 0,
+    LastUpdateTime = 0,
+}
 
--- SetDesync
-local function SetDesync(state)
+-- ═══════════════════════════════════════════════════════════════
+-- DESYNC FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════
+local function SetDesync(enabled)
     if typeof(rnet) == "table" then
-        if rnet.setdesync then pcall(function() rnet.setdesync(state) end) end
-        if rnet.desync then pcall(function() rnet.desync(state) end) end
+        if rnet.setdesync then pcall(function() rnet.setdesync(enabled) end) end
+        if rnet.desync then pcall(function() rnet.desync(enabled) end) end
     end
     if typeof(delta) == "table" then
-        if delta.raknet_desync then pcall(function() delta.raknet_desync(state) end) end
-        if delta.desync then pcall(function() delta.desync(state) end) end
+        if delta.raknet_desync then pcall(function() delta.raknet_desync(enabled) end) end
+        if delta.desync then pcall(function() delta.desync(enabled) end) end
     end
 end
 
--- SendFakePosition
-local function SendFakePosition(position)
+local function SendFakePosition(pos)
     local now = tick()
-    if now - LastSendTime < SEND_INTERVAL then return end
-    LastSendTime = now
+    if now - State.LastSendTime < CONFIG.SEND_INTERVAL then return end
+    State.LastSendTime = now
     
-    local cf = CFrame.new(position)
+    local cf = CFrame.new(pos)
     if typeof(rnet) == "table" then
         if rnet.sendphysics then pcall(function() rnet.sendphysics(cf) end) end
-        if rnet.sendposition then pcall(function() rnet.sendposition(position) end) end
+        if rnet.sendposition then pcall(function() rnet.sendposition(pos) end) end
     end
     if typeof(delta) == "table" then
         if delta.sendphysics then pcall(function() delta.sendphysics(cf) end) end
-        if delta.sendposition then pcall(function() delta.sendposition(position) end) end
+        if delta.sendposition then pcall(function() delta.sendposition(pos) end) end
     end
 end
 
--- FastRespawn
-local function FastRespawn()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then return end
-    
-    hrp.Velocity = Vector3.new(0, 0, 0)
-    hrp.RotVelocity = Vector3.new(0, 0, 0)
-    
-    task.delay(0.05, function()
-        if hum then hum:ChangeState(Enum.HumanoidStateType.Dead) end
-    end)
-end
-
--- === Insta Steal الأصلي ===
--- يخلي الـ Prompt HoldDuration = 0.08 (سريع جداً)
--- ويشتغل طوال الوقت على كل البوديومات
+-- ═══════════════════════════════════════════════════════════════
+-- INSTA STEAL (نفس الأصلي بالضبط)
+-- ═══════════════════════════════════════════════════════════════
 local function DoInstaSteal()
     pcall(function()
         local plots = workspace:FindFirstChild("Plots")
@@ -92,15 +92,13 @@ local function DoInstaSteal()
                 for _, podium in pairs(podiums:GetChildren()) do
                     local base = podium:FindFirstChild("Base")
                     local spawn = base and base:FindFirstChild("Spawn")
-                    local attachment = spawn and spawn:FindFirstChild("PromptAttachment")
+                    local att = spawn and spawn:FindFirstChild("PromptAttachment")
                     
-                    if attachment then
-                        for _, child in pairs(attachment:GetChildren()) do
-                            if child:IsA("ProximityPrompt") then
-                                -- هذا يخلي التفاعل فوري (Insta)
-                                child.HoldDuration = 0.08
-                                -- يخلي المسافة أطول شوي عشان يسهل التفاعل
-                                child.MaxActivationDistance = 8
+                    if att then
+                        for _, prompt in pairs(att:GetChildren()) do
+                            if prompt:IsA("ProximityPrompt") then
+                                prompt.HoldDuration = 0.08  -- سريع جداً
+                                prompt.MaxActivationDistance = 10  -- مسافة أطول
                             end
                         end
                     end
@@ -110,66 +108,249 @@ local function DoInstaSteal()
     end)
 end
 
--- === Desync + Speed Loop ===
-_G.FRDesyncLoop = RunService.Heartbeat:Connect(function()
-    local char = LocalPlayer.Character
-    if not char then return end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not humanoid then return end
-    
-    local realPos = hrp.Position
-    local currentSpeed = IsStealing and STEAL_SPEED or NORMAL_SPEED
-    
-    -- Desync (نفس الأصلي)
-    if not FakePosition then
-        FakePosition = realPos
-    end
-    
-    local distance = (realPos - FakePosition).Magnitude
-    
-    if distance > UPDATE_DISTANCE then
-        local direction = (realPos - FakePosition).Unit
-        FakePosition = FakePosition + (direction * 5)
+-- ═══════════════════════════════════════════════════════════════
+-- GET SPEED (نفس منطق الأصلي)
+-- ═══════════════════════════════════════════════════════════════
+local function GetSpeed()
+    -- نفس السكربت الأصلي: يتحقق من Stealing attribute
+    local isStealing = Player:GetAttribute("Stealing")
+    return isStealing and CONFIG.STEAL_SPEED or CONFIG.BASE_SPEED
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- MAIN LOOP (Desync + Speed)
+-- ═══════════════════════════════════════════════════════════════
+local function MainLoop()
+    _G.FRUltraLoop = RunService.Heartbeat:Connect(function()
+        if not State.DesyncEnabled then return end
         
-        if (realPos - FakePosition).Magnitude < UPDATE_DISTANCE - 3 then
-            FakePosition = realPos - (direction * (UPDATE_DISTANCE - 3))
-        end
-    end
-    
-    SendFakePosition(FakePosition)
-    
-    -- Speed
-    humanoid.WalkSpeed = currentSpeed
-end)
-
--- === Insta Steal Loop (طوال الوقت) ===
-_G.FRStealLoop = RunService.Heartbeat:Connect(function()
-    DoInstaSteal()
-end)
-
--- === تفعيل تلقائي ===
-task.spawn(function()
-    task.wait(0.5)
-    
-    SetDesync(true)
-    FastRespawn()
-    
-    local char = LocalPlayer.Character
-    if char then
+        local char = Player.Character
+        if not char then return end
+        
         local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp then FakePosition = hrp.Position end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hrp or not hum then return end
+        
+        local realPos = hrp.Position
+        local speed = GetSpeed()  -- يتحقق تلقائياً من وضع السرقة
+        
+        -- ═══ DESYNC (بطيء ومتأخر) ═══
+        if not State.FakePosition then
+            State.FakePosition = realPos
+        end
+        
+        local distance = (realPos - State.FakePosition).Magnitude
+        local now = tick()
+        
+        -- يحدث الموقع ببطء (كل 0.2 ثانية)
+        if now - State.LastUpdateTime >= 0.2 then
+            State.LastUpdateTime = now
+            
+            -- يتحرك بخطوة صغيرة فقط (4 وحدات)
+            if distance > CONFIG.UPDATE_DISTANCE then
+                local dir = (realPos - State.FakePosition).Unit
+                State.FakePosition = State.FakePosition + (dir * CONFIG.MOVE_STEP)
+                
+                -- يحافظ على المسافة
+                if (realPos - State.FakePosition).Magnitude < CONFIG.UPDATE_DISTANCE - 3 then
+                    State.FakePosition = realPos - (dir * (CONFIG.UPDATE_DISTANCE - 3))
+                end
+            end
+            
+            -- يرسل للسيرفر
+            SendFakePosition(State.FakePosition)
+        end
+        
+        -- ═══ SPEED (نفس الأصلي) ═══
+        -- يستخدم WalkSpeed الآمن + AssemblyLinearVelocity للسرعة الحقيقية
+        hum.WalkSpeed = 28  -- الحد الآمن
+        
+        if speed > 28 and hum.MoveDirection.Magnitude > 0.1 then
+            local currentVel = hrp.AssemblyLinearVelocity
+            local targetVel = hum.MoveDirection * speed
+            
+            -- تسارع سلس (Lerp)
+            local smoothFactor = 0.08  -- أبطأ = أقل لاق
+            hrp.AssemblyLinearVelocity = Vector3.new(
+                currentVel.X + (targetVel.X - currentVel.X) * smoothFactor,
+                currentVel.Y,
+                currentVel.Z + (targetVel.Z - currentVel.Z) * smoothFactor
+            )
+        end
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- STEAL LOOP (منفصل)
+-- ═══════════════════════════════════════════════════════════════
+local function StealLoop()
+    _G.FRStealLoop = RunService.Heartbeat:Connect(function()
+        if not State.StealEnabled then return end
+        DoInstaSteal()
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- UI (صغير للهاتف)
+-- ═══════════════════════════════════════════════════════════════
+local SG = Instance.new("ScreenGui")
+SG.Name = "FRUltraV3"
+SG.ResetOnSpawn = false
+SG.Parent = Player:WaitForChild("PlayerGui")
+_G.FRGui = SG
+
+-- النافذة الرئيسية (صغيرة للهاتف)
+local MainFrame = Instance.new("Frame")
+MainFrame.Size = UDim2.new(0, 120, 0, 140)  -- صغيرة
+MainFrame.Position = UDim2.new(1, -130, 0.5, -70)  -- يمين الشاشة
+MainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+MainFrame.BorderSizePixel = 0
+MainFrame.Parent = SG
+
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 10)
+
+-- عنوان
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 25)
+Title.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+Title.Text = "FR Ultra"
+Title.TextColor3 = Color3.fromRGB(0, 200, 255)
+Title.TextSize = 12
+Title.Font = Enum.Font.GothamBold
+Title.Parent = MainFrame
+Instance.new("UICorner", Title).CornerRadius = UDim.new(0, 6)
+
+-- زر Desync (كبير للهاتف)
+local DesyncBtn = Instance.new("TextButton")
+DesyncBtn.Size = UDim2.new(0.9, 0, 0, 35)
+DesyncBtn.Position = UDim2.new(0.05, 0, 0.23, 0)
+DesyncBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)  -- رمادي = مطفي
+DesyncBtn.Text = "Desync: OFF"
+DesyncBtn.TextColor3 = Color3.fromRGB(150, 150, 150)
+DesyncBtn.TextSize = 11
+DesyncBtn.Font = Enum.Font.GothamBold
+DesyncBtn.Parent = MainFrame
+Instance.new("UICorner", DesyncBtn).CornerRadius = UDim.new(0, 6)
+
+-- زر Steal (كبير للهاتف)
+local StealBtn = Instance.new("TextButton")
+StealBtn.Size = UDim2.new(0.9, 0, 0, 35)
+StealBtn.Position = UDim2.new(0.05, 0, 0.55, 0)
+StealBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 65)  -- رمادي = مطفي
+StealBtn.Text = "Steal: OFF"
+StealBtn.TextColor3 = Color3.fromRGB(150, 150, 150)
+StealBtn.TextSize = 11
+StealBtn.Font = Enum.Font.GothamBold
+StealBtn.Parent = MainFrame
+Instance.new("UICorner", StealBtn).CornerRadius = UDim.new(0, 6)
+
+-- حالة السرعة
+local SpeedLabel = Instance.new("TextLabel")
+SpeedLabel.Size = UDim2.new(0.9, 0, 0, 20)
+SpeedLabel.Position = UDim2.new(0.05, 0, 0.82, 0)
+SpeedLabel.BackgroundTransparency = 1
+SpeedLabel.Text = "Speed: 40"
+SpeedLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+SpeedLabel.TextSize = 10
+SpeedLabel.Font = Enum.Font.Gotham
+SpeedLabel.Parent = MainFrame
+
+-- تحديث حالة السرعة
+task.spawn(function()
+    while SpeedLabel.Parent do
+        local s = GetSpeed()
+        SpeedLabel.Text = "Speed: " .. s
+        SpeedLabel.TextColor3 = (s == CONFIG.STEAL_SPEED) and Color3.fromRGB(255, 200, 100) or Color3.fromRGB(100, 255, 100)
+        task.wait(0.2)
     end
-    
-    Notify("FR Auto", "✅ DESYNC + INSTA STEAL\nسرعة: 40 | سرقة: 15\nاضغط K للتبديل")
 end)
 
--- === تبديل السرعة بزر K ===
-UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
-    if input.KeyCode == Enum.KeyCode.K then
-        IsStealing = not IsStealing
-        Notify("FR Auto", IsStealing and "وضع السرقة: 15" or "الوضع العادي: 40")
+-- سحب (يعمل على الهاتف والكمبيوتر)
+local dragging, dragStart, startPos
+MainFrame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = MainFrame.Position
     end
 end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local delta = input.Position - dragStart
+        MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- BUTTON FUNCTIONS
+-- ═══════════════════════════════════════════════════════════════
+
+-- تفعيل Desync
+DesyncBtn.MouseButton1Click:Connect(function()
+    State.DesyncEnabled = not State.DesyncEnabled
+    
+    if State.DesyncEnabled then
+        -- شغل
+        State.FakePosition = nil
+        SetDesync(true)
+        MainLoop()
+        
+        -- لون أخضر
+        TweenService:Create(DesyncBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(0, 150, 100)}):Play()
+        DesyncBtn.Text = "Desync: ON"
+        DesyncBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Notify("FR", "Desync ON | Speed: " .. GetSpeed())
+    else
+        -- طفي
+        if _G.FRUltraLoop then _G.FRUltraLoop:Disconnect() _G.FRUltraLoop = nil end
+        SetDesync(false)
+        State.FakePosition = nil
+        
+        local char = Player.Character
+        if char then
+            local hum = char:FindFirstChildOfClass("Humanoid")
+            if hum then hum.WalkSpeed = 16 end
+        end
+        
+        -- لون رمادي
+        TweenService:Create(DesyncBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(60, 60, 65)}):Play()
+        DesyncBtn.Text = "Desync: OFF"
+        DesyncBtn.TextColor3 = Color3.fromRGB(150, 150, 150)
+        Notify("FR", "Desync OFF")
+    end
+end)
+
+-- تفعيل Steal
+StealBtn.MouseButton1Click:Connect(function()
+    State.StealEnabled = not State.StealEnabled
+    
+    if State.StealEnabled then
+        -- شغل
+        StealLoop()
+        
+        -- لون برتقالي
+        TweenService:Create(StealBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(255, 150, 0)}):Play()
+        StealBtn.Text = "Steal: ON"
+        StealBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Notify("FR", "Insta Steal ON")
+    else
+        -- طفي
+        if _G.FRStealLoop then _G.FRStealLoop:Disconnect() _G.FRStealLoop = nil end
+        
+        -- لون رمادي
+        TweenService:Create(StealBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(60, 60, 65)}):Play()
+        StealBtn.Text = "Steal: OFF"
+        StealBtn.TextColor3 = Color3.fromRGB(150, 150, 150)
+        Notify("FR", "Steal OFF")
+    end
+end)
+
+-- إشعار التشغيل
+Notify("FR Ultra V3", "جاهز!\nDesync + Insta Steal\nSpeed: 40/15")
