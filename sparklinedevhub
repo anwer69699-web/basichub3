@@ -155,7 +155,7 @@ task.spawn(function()
         if hrp then FakePosition = hrp.Position end
     end
     
-    Notify("FR Auto", "✅ DESYNC + INSTA STEAL\nسرعة: 40 | اضغط K للسرقة")
+    Notify("FR Auto", " DESYNC + INSTA STEAL\nسرعة: 40 | اضغط K للسرقة")
 end)
 
 -- === تبديل السرعة بزر K ===
