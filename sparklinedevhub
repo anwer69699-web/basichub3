@@ -1,27 +1,82 @@
--- FR Auto - Desync + Insta Steal (بدون واجهة، يشتغل تلقائياً)
+-- FR Desync + Insta Steal - Auto (بدون GUI)
 
-local P = game:GetService("Players").LocalPlayer
-local R = game:GetService("RunService")
-local S = game:GetService("StarterGui")
+local Players = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+local RunService = game:GetService("RunService")
+local StarterGui = game:GetService("StarterGui")
 
--- حذف القديم
-if _G.FRDesyncLoop then _G.FRDesyncLoop:Disconnect() _G.FRDesyncLoop = nil end
-if _G.FRStealLoop then _G.FRStealLoop:Disconnect() _G.FRStealLoop = nil end
-
--- إشعار
-local function N(m)
-    pcall(function() S:SetCore("SendNotification", {Title="FR Auto",Text=m,Duration=3}) end)
+-- إشعار بسيط
+local function Notify(title, text)
+    pcall(function()
+        StarterGui:SetCore("SendNotification", {
+            Title = title,
+            Text = text,
+            Duration = 3,
+            Icon = "rbxassetid://9079992154"
+        })
+    end)
 end
 
+-- تنظيف القديم
+if _G.FRDesyncLoop then _G.FRDesyncLoop:Disconnect() end
+if _G.FRStealLoop then _G.FRStealLoop:Disconnect() end
+if _G.FRGui then pcall(function() _G.FRGui:Destroy() end) end
+
 -- إعدادات
-local SPEED = 23
-local DESYNC_DELAY = 0.25
-local UPDATE_DIST = 9
+local NORMAL_SPEED = 30
+local STEAL_SPEED = 20
+local UPDATE_DISTANCE = 15
+local SEND_INTERVAL = 0.12
 
 -- متغيرات
-local FakePos = nil
-local LastUpdate = 0
-local LastSend = 0
+local IsStealing = false
+local FakePosition = nil
+local LastSendTime = 0
+
+-- SetDesync
+local function SetDesync(state)
+    if typeof(rnet) == "table" then
+        if rnet.setdesync then pcall(function() rnet.setdesync(state) end) end
+        if rnet.desync then pcall(function() rnet.desync(state) end) end
+    end
+    if typeof(delta) == "table" then
+        if delta.raknet_desync then pcall(function() delta.raknet_desync(state) end) end
+        if delta.desync then pcall(function() delta.desync(state) end) end
+    end
+end
+
+-- SendFakePosition
+local function SendFakePosition(position)
+    local now = tick()
+    if now - LastSendTime < SEND_INTERVAL then return end
+    LastSendTime = now
+    
+    local cf = CFrame.new(position)
+    if typeof(rnet) == "table" then
+        if rnet.sendphysics then pcall(function() rnet.sendphysics(cf) end) end
+        if rnet.sendposition then pcall(function() rnet.sendposition(position) end) end
+    end
+    if typeof(delta) == "table" then
+        if delta.sendphysics then pcall(function() delta.sendphysics(cf) end) end
+        if delta.sendposition then pcall(function() delta.sendposition(position) end) end
+    end
+end
+
+-- FastRespawn
+local function FastRespawn()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+    
+    hrp.Velocity = Vector3.new(0, 0, 0)
+    hrp.RotVelocity = Vector3.new(0, 0, 0)
+    
+    task.delay(0.05, function()
+        if hum then hum:ChangeState(Enum.HumanoidStateType.Dead) end
+    end)
+end
 
 -- Insta Steal
 local function DoSteal()
@@ -48,66 +103,67 @@ local function DoSteal()
     end)
 end
 
--- Desync + Speed Loop
-_G.FRDesyncLoop = R.Heartbeat:Connect(function()
-    local c = P.Character
-    if not c then return end
-    local hrp = c:FindFirstChild("HumanoidRootPart")
-    local hum = c:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then return end
+-- === Desync + Speed Loop ===
+_G.FRDesyncLoop = RunService.Heartbeat:Connect(function()
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not humanoid then return end
     
     local realPos = hrp.Position
+    local currentSpeed = IsStealing and STEAL_SPEED or NORMAL_SPEED
     
-    -- DESYNC
-    if not FakePos then FakePos = realPos end
+    -- Desync
+    if not FakePosition then
+        FakePosition = realPos
+    end
     
-    local dist = (realPos - FakePos).Magnitude
-    local now = tick()
+    local distance = (realPos - FakePosition).Magnitude
     
-    if now - LastUpdate >= DESYNC_DELAY then
-        LastUpdate = now
+    if distance > UPDATE_DISTANCE then
+        local direction = (realPos - FakePosition).Unit
+        FakePosition = FakePosition + (direction * 5)
         
-        if dist > UPDATE_DIST then
-            local dir = (realPos - FakePos).Unit
-            FakePos = FakePos + (dir * 8)
-            
-            if (realPos - FakePos).Magnitude < UPDATE_DIST - 5 then
-                FakePos = realPos - (dir * (UPDATE_DIST - 5))
-            end
-        end
-        
-        if now - LastSend >= 0.15 then
-            LastSend = now
-            local cf = CFrame.new(FakePos)
-            if typeof(rnet) == "table" then
-                if rnet.sendposition then pcall(function() rnet.sendposition(FakePos) end) end
-                if rnet.sendphysics then pcall(function() rnet.sendphysics(cf) end) end
-            end
-            if typeof(delta) == "table" then
-                if delta.sendposition then pcall(function() delta.sendposition(FakePos) end) end
-                if delta.sendphysics then pcall(function() delta.sendphysics(cf) end) end
-            end
+        if (realPos - FakePosition).Magnitude < UPDATE_DISTANCE - 3 then
+            FakePosition = realPos - (direction * (UPDATE_DISTANCE - 3))
         end
     end
     
-    -- SPEED
-    hum.WalkSpeed = 28
+    SendFakePosition(FakePosition)
     
-    if SPEED > 28 and hum.MoveDirection.Magnitude > 0.1 then
-        local vel = hrp.AssemblyLinearVelocity
-        local target = hum.MoveDirection * SPEED
-        hrp.AssemblyLinearVelocity = Vector3.new(
-            vel.X + (target.X - vel.X) * 0.12,
-            vel.Y,
-            vel.Z + (target.Z - vel.Z) * 0.12
-        )
-    end
+    -- Speed
+    humanoid.WalkSpeed = currentSpeed
 end)
 
--- Steal Loop
-_G.FRStealLoop = R.Heartbeat:Connect(function()
+-- === Insta Steal Loop ===
+_G.FRStealLoop = RunService.Heartbeat:Connect(function()
     DoSteal()
 end)
 
--- إشعار التشغيل
-N("✅ DESYNC + INSTA STEAL\nتم التفعيل تلقائياً!")
+-- === تفعيل Desync مباشرة ===
+task.spawn(function()
+    task.wait(0.5)
+    
+    SetDesync(true)
+    FastRespawn()
+    
+    local char = LocalPlayer.Character
+    if char then
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if hrp then FakePosition = hrp.Position end
+    end
+    
+    Notify("FR Auto", "✅ DESYNC + INSTA STEAL\nسرعة: 40 | اضغط K للسرقة")
+end)
+
+-- === تبديل السرعة بزر K ===
+local UserInputService = game:GetService("UserInputService")
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.K then
+        IsStealing = not IsStealing
+        Notify("FR Auto", IsStealing and "وضع السرقة: 27" or "الوضع العادي: 40")
+    end
+end)
