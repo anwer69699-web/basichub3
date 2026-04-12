@@ -14,9 +14,9 @@ local function N(m)
 end
 
 -- إعدادات
-local SPEED = 20
+local SPEED = 23
 local DESYNC_DELAY = 0.25
-local UPDATE_DIST = 20
+local UPDATE_DIST = 9
 
 -- متغيرات
 local FakePos = nil
