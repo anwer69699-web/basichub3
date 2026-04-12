@@ -1,11 +1,12 @@
--- FR Desync + Insta Steal - Auto (بدون GUI)
+-- FR Desync + Insta Steal Auto - سرعة سرقة 15
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local RunService = game:GetService("RunService")
 local StarterGui = game:GetService("StarterGui")
+local UserInputService = game:GetService("UserInputService")
 
--- إشعار بسيط
+-- إشعار
 local function Notify(title, text)
     pcall(function()
         StarterGui:SetCore("SendNotification", {
@@ -20,11 +21,10 @@ end
 -- تنظيف القديم
 if _G.FRDesyncLoop then _G.FRDesyncLoop:Disconnect() end
 if _G.FRStealLoop then _G.FRStealLoop:Disconnect() end
-if _G.FRGui then pcall(function() _G.FRGui:Destroy() end) end
 
 -- إعدادات
-local NORMAL_SPEED = 30
-local STEAL_SPEED = 20
+local NORMAL_SPEED = 40
+local STEAL_SPEED = 15  -- سرعة السرقة 15
 local UPDATE_DISTANCE = 15
 local SEND_INTERVAL = 0.12
 
@@ -78,22 +78,29 @@ local function FastRespawn()
     end)
 end
 
--- Insta Steal
-local function DoSteal()
+-- === Insta Steal الأصلي ===
+-- يخلي الـ Prompt HoldDuration = 0.08 (سريع جداً)
+-- ويشتغل طوال الوقت على كل البوديومات
+local function DoInstaSteal()
     pcall(function()
         local plots = workspace:FindFirstChild("Plots")
         if not plots then return end
+        
         for _, plot in pairs(plots:GetChildren()) do
-            local pods = plot:FindFirstChild("AnimalPodiums")
-            if pods then
-                for _, pod in pairs(pods:GetChildren()) do
-                    local base = pod:FindFirstChild("Base")
-                    local sp = base and base:FindFirstChild("Spawn")
-                    local att = sp and sp:FindFirstChild("PromptAttachment")
-                    if att then
-                        for _, pr in pairs(att:GetChildren()) do
-                            if pr:IsA("ProximityPrompt") then
-                                pr.HoldDuration = 0.08
+            local podiums = plot:FindFirstChild("AnimalPodiums")
+            if podiums then
+                for _, podium in pairs(podiums:GetChildren()) do
+                    local base = podium:FindFirstChild("Base")
+                    local spawn = base and base:FindFirstChild("Spawn")
+                    local attachment = spawn and spawn:FindFirstChild("PromptAttachment")
+                    
+                    if attachment then
+                        for _, child in pairs(attachment:GetChildren()) do
+                            if child:IsA("ProximityPrompt") then
+                                -- هذا يخلي التفاعل فوري (Insta)
+                                child.HoldDuration = 0.08
+                                -- يخلي المسافة أطول شوي عشان يسهل التفاعل
+                                child.MaxActivationDistance = 8
                             end
                         end
                     end
@@ -115,7 +122,7 @@ _G.FRDesyncLoop = RunService.Heartbeat:Connect(function()
     local realPos = hrp.Position
     local currentSpeed = IsStealing and STEAL_SPEED or NORMAL_SPEED
     
-    -- Desync
+    -- Desync (نفس الأصلي)
     if not FakePosition then
         FakePosition = realPos
     end
@@ -137,12 +144,12 @@ _G.FRDesyncLoop = RunService.Heartbeat:Connect(function()
     humanoid.WalkSpeed = currentSpeed
 end)
 
--- === Insta Steal Loop ===
+-- === Insta Steal Loop (طوال الوقت) ===
 _G.FRStealLoop = RunService.Heartbeat:Connect(function()
-    DoSteal()
+    DoInstaSteal()
 end)
 
--- === تفعيل Desync مباشرة ===
+-- === تفعيل تلقائي ===
 task.spawn(function()
     task.wait(0.5)
     
@@ -155,15 +162,14 @@ task.spawn(function()
         if hrp then FakePosition = hrp.Position end
     end
     
-    Notify("FR Auto", " DESYNC + INSTA STEAL\nسرعة: 40 | اضغط K للسرقة")
+    Notify("FR Auto", "✅ DESYNC + INSTA STEAL\nسرعة: 40 | سرقة: 15\nاضغط K للتبديل")
 end)
 
 -- === تبديل السرعة بزر K ===
-local UserInputService = game:GetService("UserInputService")
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.K then
         IsStealing = not IsStealing
-        Notify("FR Auto", IsStealing and "وضع السرقة: 27" or "الوضع العادي: 40")
+        Notify("FR Auto", IsStealing and "وضع السرقة: 15" or "الوضع العادي: 40")
     end
 end)
