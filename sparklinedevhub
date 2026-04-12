@@ -30,8 +30,8 @@ _G.FRHUB_VELOCITY_LOADED = true
 -- إعدادات السكربت
 local Settings = {
     WalkSpeed = 28,           -- السرعة الأساسية الآمنة
-    SprintSpeed = 40,         -- سرعة الركض
-    StealSpeed = 15,          -- سرعة السرقة
+    SprintSpeed = 28,         -- سرعة الركض
+    StealSpeed = 28,          -- سرعة السرقة
     UseAssemblyVelocity = true, -- استخدام AssemblyLinearVelocity
     PredictionEnabled = true,   -- تفعيل الـ Client Prediction
     NetworkUpdateRate = 0.1,    -- معدل تحديث الشبكة (10 مرات بالثانية بدل 60)
