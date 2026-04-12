@@ -17,7 +17,7 @@ if _G.FRStealLoop then _G.FRStealLoop:Disconnect() _G.FRStealLoop = nil end
 local SPEED = 40
 local STEAL_SPEED = 20
 local DESYNC_DELAY = 0.25  -- تجديد متأخر (كل 0.25 ثانية)
-local UPDATE_DIST = 20     -- يجدد فقط إذا تجاوزت 20 متر
+local UPDATE_DIST = 13     -- يجدد فقط إذا تجاوزت 20 متر
 
 -- متغيرات
 local Enabled = false
