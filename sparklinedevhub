@@ -1,4 +1,4 @@
--- Desync محسّن للأجهزة الضعيفة - بدون لاق
+-- Desync V11 - محسّن للتفاعل مع السيرفر
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
@@ -7,7 +7,6 @@ local RunService = game:GetService("RunService")
 local TweenService = game:GetService("TweenService")
 local HttpService = game:GetService("HttpService")
 local StarterGui = game:GetService("StarterGui")
-local Workspace = game:GetService("Workspace")
 
 local function Notify(title, text, duration)
     duration = duration or 3
@@ -50,15 +49,16 @@ local function LoadSettings()
 end
 LoadSettings()
 
+-- واجهة المستخدم
 local ScreenGui = Instance.new("ScreenGui")
-ScreenGui.Name = "FRHUB_Desync_V10"
+ScreenGui.Name = "FRHUB_Desync_V11"
 ScreenGui.ResetOnSpawn = false
 ScreenGui.Parent = LocalPlayer:WaitForChild("PlayerGui")
 
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainFrame"
-MainFrame.Size = UDim2.new(0, 260, 0, 300)
-MainFrame.Position = UDim2.new(0.5, -130, 0.4, -150)
+MainFrame.Size = UDim2.new(0, 260, 0, 320)
+MainFrame.Position = UDim2.new(0.5, -130, 0.4, -160)
 MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 25)
 MainFrame.BorderSizePixel = 0
 MainFrame.ClipsDescendants = true
@@ -83,7 +83,7 @@ local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, -50, 1, 0)
 Title.Position = UDim2.new(0, 10, 0, 0)
 Title.BackgroundTransparency = 1
-Title.Text = "FR HUB | Desync V10"
+Title.Text = "FR HUB | Desync V11"
 Title.TextColor3 = Color3.fromRGB(255, 255, 255)
 Title.TextSize = 16
 Title.Font = Enum.Font.GothamBold
@@ -113,39 +113,22 @@ UserInputService.InputChanged:Connect(function(input)
     if input == dragInput and dragging then update(input) end
 end)
 
+-- إعدادات السرعة
+local NORMAL_SPEED = 45      -- السرعة العادية
+local STEAL_SPEED = 28       -- سرعة السرقة
+local UPDATE_DISTANCE = 8   -- تجديد الموقع عند 12 متر
+local INTERPOLATION_SPEED = 8 -- سرعة التحريك التدريجي للموقع الزائف
+
 -- متغيرات Desync
 local DesyncEnabled = false
 local Connection_RenderStepped = nil
-local TargetServerPosition = nil 
-local ActualServerPosition = nil 
-local FakePosHighlight = nil
-local FakePosLabel = nil
-local ServerPosPart = nil
-local CharacterAddedConnection = nil
-local StatusLabel = nil
-local RealPosLabel = nil
-local LastSendTime = 0
-local SendInterval = 0.08 -- إرسال كل 0.08 ثانية بدل كل فريم
+local FakePosition = nil           -- الموقع الزائف (يتغير تدريجياً)
+local ServerPosition = nil         -- موقع السيرفر الفعلي
+local IsStealing = false
+local LastUpdateTime = 0
+local UpdateInterval = 0.08
 
--- Fast Respawn محسّن (بدون velocity ضخم)
-function FastRespawn()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not hum then return end
-    
-    -- إزالة الـ Velocity الضخم اللي يسبب مشاكل
-    hrp.Velocity = Vector3.new(0, 50, 0) -- قيمة منخفضة جداً
-    hrp.RotVelocity = Vector3.new(0, 0, 0) -- إزالة الدوران السريع
-    
-    task.delay(0.05, function()
-        if hum then
-            hum:ChangeState(Enum.HumanoidStateType.Dead)
-        end
-    end)
-end
-
+-- إعدادات الـ rnet/delta
 local function SetDesync(state)
     if state then
         if typeof(rnet) == "table" then
@@ -168,198 +151,91 @@ local function SetDesync(state)
     end
 end
 
--- إرسال الموقع بمعدل محدود (التعديل الرئيسي)
-local function SendFakePosition(position)
-    local now = tick()
-    if now - LastSendTime < SendInterval then return end -- تخطي إذا م مر وقت كافي
-    LastSendTime = now
-    
-    local cf = CFrame.new(position)
+-- إرسال الموقع الزائف للسيرفر
+local function SendPosition(pos)
+    local cf = CFrame.new(pos)
     if typeof(rnet) == "table" then
         if rnet.sendphysics then pcall(function() rnet.sendphysics(cf) end) end
-        if rnet.sendposition then pcall(function() rnet.sendposition(position) end) end
+        if rnet.sendposition then pcall(function() rnet.sendposition(pos) end) end
     end
     if typeof(delta) == "table" then
         if delta.sendphysics then pcall(function() delta.sendphysics(cf) end) end
-        if delta.sendposition then pcall(function() delta.sendposition(position) end) end
+        if delta.sendposition then pcall(function() delta.sendposition(pos) end) end
     end
 end
 
-local function GetActualServerPosition()
+-- الحصول على موقع السيرفر
+local function GetServerPosition()
     if typeof(delta) == "table" and delta.get_server_position then
         local success, pos = pcall(delta.get_server_position)
-        if success and pos and typeof(pos) == "Vector3" then
-            return pos
-        end
+        if success and pos and typeof(pos) == "Vector3" then return pos end
     end
     if typeof(rnet) == "table" and rnet.get_server_position then
         local success, pos = pcall(rnet.get_server_position)
-        if success and pos and typeof(pos) == "Vector3" then
-            return pos
-        end
+        if success and pos and typeof(pos) == "Vector3" then return pos end
     end
+    return nil
+end
+
+-- Fast Respawn محسّن (بدون velocity ضخم)
+local function FastRespawn()
     local char = LocalPlayer.Character
-    if char then
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            local success, pos = pcall(function()
-                return gethiddenproperty(hrp, "NetworkPosition") or 
-                       gethiddenproperty(hrp, "ServerPosition") or
-                       gethiddenproperty(hrp, "ReplicationPosition")
-            end)
-            if success and pos and typeof(pos) == "Vector3" then
-                return pos
-            end
-        end
-    end
-    return nil 
-end
-
-local function CreateHighlight()
-    if FakePosHighlight then FakePosHighlight:Destroy() end
-    if FakePosLabel then FakePosLabel:Destroy() end
-    if ServerPosPart then ServerPosPart:Destroy() end
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
     
-    ServerPosPart = Instance.new("Part")
-    ServerPosPart.Name = "ServerPosPart"
-    ServerPosPart.Size = Vector3.new(4, 6, 4)
-    ServerPosPart.Transparency = 1
-    ServerPosPart.CanCollide = false
-    ServerPosPart.Anchored = true
-    ServerPosPart.Color = Color3.fromRGB(255, 0, 0)
-    ServerPosPart.Material = Enum.Material.Neon
-    ServerPosPart.Parent = workspace
+    hrp.Velocity = Vector3.new(0, 30, 0)
+    hrp.RotVelocity = Vector3.new(0, 0, 0)
     
-    FakePosHighlight = Instance.new("BoxHandleAdornment")
-    FakePosHighlight.Name = "ServerPosIndicator"
-    FakePosHighlight.Size = Vector3.new(4, 6, 4)
-    FakePosHighlight.Color3 = Color3.fromRGB(255, 0, 0)
-    FakePosHighlight.Transparency = 0.3
-    FakePosHighlight.ZIndex = 10
-    FakePosHighlight.AlwaysOnTop = true
-    FakePosHighlight.Parent = workspace
-    FakePosHighlight.Visible = false
-    
-    FakePosLabel = Instance.new("BillboardGui")
-    FakePosLabel.Name = "ServerPosLabel"
-    FakePosLabel.Size = UDim2.new(0, 200, 0, 60)
-    FakePosLabel.AlwaysOnTop = true
-    FakePosLabel.Enabled = false
-    FakePosLabel.Parent = workspace
-    
-    local TextLabel = Instance.new("TextLabel")
-    TextLabel.Size = UDim2.new(1, 0, 1, 0)
-    TextLabel.BackgroundTransparency = 1
-    TextLabel.Text = "Test"
-    TextLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
-    TextLabel.TextSize = 12
-    TextLabel.Font = Enum.Font.SourceSansBold
-    TextLabel.Parent = FakePosLabel
-end
-
-CreateHighlight()
-
--- Rubber Banding محسّن (بمعدل أقل)
-local RubberPart, RubberHighlight, RubberLabel, RubberConn
-local LastRBUpdate = 0
-local RBInterval = 0.1 -- تحديث كل 0.1 ثانية
-
-function StartRB()
-    if RubberConn then RubberConn:Disconnect() end
-    if RubberPart then RubberPart:Destroy() end
-    if RubberHighlight then RubberHighlight:Destroy() end
-    if RubberLabel then RubberLabel:Destroy() end
-
-    RubberPart = Instance.new("Part")
-    RubberPart.Size = Vector3.new(4, 6, 4)
-    RubberPart.Anchored = true
-    RubberPart.CanCollide = false
-    RubberPart.Transparency = 1
-    RubberPart.Parent = workspace
-
-    RubberHighlight = Instance.new("BoxHandleAdornment")
-    RubberHighlight.Size = Vector3.new(4, 6, 4)
-    RubberHighlight.Color3 = Color3.fromRGB(0, 255, 0)
-    RubberHighlight.Transparency = 0.25
-    RubberHighlight.AlwaysOnTop = true
-    RubberHighlight.Adornee = RubberPart
-    RubberHighlight.Parent = workspace
-
-    RubberLabel = Instance.new("BillboardGui")
-    RubberLabel.Size = UDim2.new(0, 200, 0, 50)
-    RubberLabel.AlwaysOnTop = true
-    RubberLabel.Adornee = RubberPart
-    RubberLabel.Parent = workspace
-
-    local txt = Instance.new("TextLabel")
-    txt.Size = UDim2.new(1, 0, 1, 0)
-    txt.BackgroundTransparency = 1
-    txt.Text = "مكانك"
-    txt.TextColor3 = Color3.fromRGB(0, 255, 0)
-    txt.TextStrokeTransparency = 0
-    txt.TextSize = 14
-    txt.Font = Enum.Font.GothamBold
-    txt.Parent = RubberLabel
-
-    local lastPos = nil
-
-    RubberConn = RunService.Heartbeat:Connect(function(dt)
-        -- تحديث بمعدل محدود
-        local now = tick()
-        if now - LastRBUpdate < RBInterval then return end
-        LastRBUpdate = now
-        
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp then return end
-
-        local currentPos = hrp.Position
-        local velocity = hrp.Velocity
-
-        if lastPos then
-            local delta = (currentPos - lastPos)
-            local dist = delta.Magnitude
-            local maxPossible = velocity.Magnitude * dt + 2
-            local predicted = lastPos + (velocity * dt)
-            local errorDist = (currentPos - predicted).Magnitude
-
-            if dist > 2 and errorDist > 3 and dist > maxPossible then
-                RubberPart.CFrame = CFrame.new(currentPos)
-            end
-        end
-
-        lastPos = currentPos
+    task.delay(0.05, function()
+        if hum then hum:ChangeState(Enum.HumanoidStateType.Dead) end
     end)
 end
 
-function StopRB()
-    if RubberConn then RubberConn:Disconnect() end
-    if RubberHighlight then RubberHighlight:Destroy() end
-    if RubberPart then RubberPart:Destroy() end
-    if RubberLabel then RubberLabel:Destroy() end
-end
-
--- واجهة المستخدم
+-- عناصر الواجهة
 local ToggleBtn = Instance.new("TextButton")
 ToggleBtn.Name = "ToggleBtn"
-ToggleBtn.Size = UDim2.new(0.9, 0, 0, 45)
-ToggleBtn.Position = UDim2.new(0.05, 0, 0.15, 0)
+ToggleBtn.Size = UDim2.new(0.9, 0, 0, 40)
+ToggleBtn.Position = UDim2.new(0.05, 0, 0.12, 0)
 ToggleBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 45)
 ToggleBtn.Text = "تفعيل Desync"
 ToggleBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
-ToggleBtn.TextSize = 18
+ToggleBtn.TextSize = 16
 ToggleBtn.Font = Enum.Font.GothamBold
 ToggleBtn.AutoButtonColor = false
 ToggleBtn.Parent = MainFrame
 
-local BtnCorner = Instance.new("UICorner")
-BtnCorner.CornerRadius = UDim.new(0, 8)
-BtnCorner.Parent = ToggleBtn
+Instance.new("UICorner", ToggleBtn).CornerRadius = UDim.new(0, 8)
 
-StatusLabel = Instance.new("TextLabel")
+-- زر السرعة العادية (45)
+local SpeedNormalBtn = Instance.new("TextButton")
+SpeedNormalBtn.Size = UDim2.new(0.43, 0, 0, 35)
+SpeedNormalBtn.Position = UDim2.new(0.05, 0, 0.26, 0)
+SpeedNormalBtn.BackgroundColor3 = Color3.fromRGB(0, 120, 255)
+SpeedNormalBtn.Text = "سرعة: 45"
+SpeedNormalBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+SpeedNormalBtn.TextSize = 14
+SpeedNormalBtn.Font = Enum.Font.GothamBold
+SpeedNormalBtn.Parent = MainFrame
+Instance.new("UICorner", SpeedNormalBtn).CornerRadius = UDim.new(0, 6)
+
+-- زر سرعة السرقة (28)
+local SpeedStealBtn = Instance.new("TextButton")
+SpeedStealBtn.Size = UDim2.new(0.43, 0, 0, 35)
+SpeedStealBtn.Position = UDim2.new(0.52, 0, 0.26, 0)
+SpeedStealBtn.BackgroundColor3 = Color3.fromRGB(255, 100, 0)
+SpeedStealBtn.Text = "سرقة: 28"
+SpeedStealBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+SpeedStealBtn.TextSize = 14
+SpeedStealBtn.Font = Enum.Font.GothamBold
+SpeedStealBtn.Parent = MainFrame
+Instance.new("UICorner", SpeedStealBtn).CornerRadius = UDim.new(0, 6)
+
+local StatusLabel = Instance.new("TextLabel")
 StatusLabel.Name = "StatusLabel"
-StatusLabel.Size = UDim2.new(0.9, 0, 0, 20)
-StatusLabel.Position = UDim2.new(0.05, 0, 0.32, 0)
+StatusLabel.Size = UDim2.new(0.9, 0, 0, 18)
+StatusLabel.Position = UDim2.new(0.05, 0, 0.38, 0)
 StatusLabel.BackgroundTransparency = 1
 StatusLabel.Text = "الحالة: متوقف"
 StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
@@ -367,167 +243,51 @@ StatusLabel.TextSize = 12
 StatusLabel.Font = Enum.Font.GothamBold
 StatusLabel.Parent = MainFrame
 
-RealPosLabel = Instance.new("TextLabel")
-RealPosLabel.Name = "RealPosLabel"
-RealPosLabel.Size = UDim2.new(0.9, 0, 0, 30)
-RealPosLabel.Position = UDim2.new(0.05, 0, 0.38, 0)
-RealPosLabel.BackgroundTransparency = 1
-RealPosLabel.Text = "سرعة محسّنة - بدون لاق"
-RealPosLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-RealPosLabel.TextSize = 10
-RealPosLabel.Font = Enum.Font.Gotham
-RealPosLabel.TextWrapped = true
-RealPosLabel.Parent = MainFrame
+local DistanceLabel = Instance.new("TextLabel")
+DistanceLabel.Name = "DistanceLabel"
+DistanceLabel.Size = UDim2.new(0.9, 0, 0, 30)
+DistanceLabel.Position = UDim2.new(0.05, 0, 0.44, 0)
+DistanceLabel.BackgroundTransparency = 1
+DistanceLabel.Text = "المسافة: 0m | تجديد عند: " .. UPDATE_DISTANCE .. "m"
+DistanceLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+DistanceLabel.TextSize = 10
+DistanceLabel.Font = Enum.Font.Gotham
+DistanceLabel.TextWrapped = true
+DistanceLabel.Parent = MainFrame
 
-local function OnCharacterAdded(newChar)
-    if not DesyncEnabled then return end
-    local hrp = newChar:WaitForChild("HumanoidRootPart", 2)
-    if not hrp then return end
-    
-    SetDesync(true)
-    
-    -- إرسال بمعدل أقل (0.08 ثانية)
-    task.spawn(function()
-        while DesyncEnabled and newChar.Parent do
-            if TargetServerPosition then
-                SendFakePosition(TargetServerPosition)
-            end
-            task.wait(SendInterval)
-        end
-    end)
-end
-
-local function ToggleDesync()
-    DesyncEnabled = not DesyncEnabled
-    if DesyncEnabled then
-        StartRB()
-        TweenService:Create(ToggleBtn, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(0, 170, 127), TextColor3 = Color3.fromRGB(255, 255, 255)}):Play()
-        ToggleBtn.Text = "Desync: مفعل"
-        StatusLabel.Text = "جاري المحاولة..."
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 255, 100)
-        
-        local char = LocalPlayer.Character
-        local hrp = char and char:FindFirstChild("HumanoidRootPart")
-        if hrp then
-            TargetServerPosition = hrp.Position
-        end
-        
-        SetDesync(true)
-        FastRespawn()
-        Notify("FR HUB", "تم تفعيل الDesync المحسّن!", 2)
-        
-        if not FakePosHighlight or not FakePosHighlight.Parent then
-            CreateHighlight()
-        end
-        
-        if TargetServerPosition and ServerPosPart then
-            ServerPosPart.CFrame = CFrame.new(TargetServerPosition)
-            ServerPosPart.Transparency = 1
-            FakePosHighlight.CFrame = CFrame.new(TargetServerPosition)
-            FakePosHighlight.Visible = false
-            FakePosLabel.Adornee = ServerPosPart
-            FakePosLabel.Enabled = false
-        end
-        
-        -- Loop رئيسي بمعدل أقل (0.08 ثانية)
-        Connection_RenderStepped = RunService.Heartbeat:Connect(function()
-            local char = LocalPlayer.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            
-            if hrp and TargetServerPosition then
-                -- إرسال الموقع بمعدل محدود
-                SendFakePosition(TargetServerPosition)
-                
-                -- تحديث العرض بمعدل أقل (كل 0.2 ثانية)
-                if tick() % 0.2 < 0.05 then
-                    ActualServerPosition = GetActualServerPosition()
-                    local realPos = hrp.Position
-                    local distance = (realPos - TargetServerPosition).Magnitude
-                    
-                    if ActualServerPosition then
-                        local actualDistance = (ActualServerPosition - TargetServerPosition).Magnitude
-                        RealPosLabel.Text = "السيرفر " .. math.floor(ActualServerPosition.X) .. ", " .. math.floor(ActualServerPosition.Z) ..
-                                           "\nالفرق: " .. math.floor(actualDistance) .. "m"
-                        
-                        if actualDistance < 5 then
-                            StatusLabel.Text = "ناجح! (" .. math.floor(actualDistance) .. "m)"
-                            StatusLabel.TextColor3 = Color3.fromRGB(0, 255, 100)
-                            FakePosHighlight.Color3 = Color3.fromRGB(0, 255, 0)
-                        else
-                            StatusLabel.Text = "فشل! (" .. math.floor(actualDistance) .. "m)"
-                            StatusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
-                            FakePosHighlight.Color3 = Color3.fromRGB(255, 0, 0)
-                        end
-                    else
-                        if distance > 10 then
-                            StatusLabel.Text = "شغال (" .. math.floor(distance) .. "m)"
-                            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-                        else
-                            StatusLabel.Text = "شغال (" .. math.floor(distance) .. "m)"
-                            StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 0)
-                        end
-                    end
-                end
-            end
-        end)
-        
-        CharacterAddedConnection = LocalPlayer.CharacterAdded:Connect(OnCharacterAdded)
-    else
-        StopRB()
-        TweenService:Create(ToggleBtn, TweenInfo.new(0.3), {BackgroundColor3 = Color3.fromRGB(45, 45, 45), TextColor3 = Color3.fromRGB(200, 200, 200)}):Play()
-        ToggleBtn.Text = "تفعيل Desync"
-        StatusLabel.Text = "الحالة: متوقف"
-        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-        RealPosLabel.Text = "سرعة محسّنة - بدون لاق"
-        SetDesync(false)
-        if Connection_RenderStepped then Connection_RenderStepped:Disconnect() end
-        if CharacterAddedConnection then CharacterAddedConnection:Disconnect() end
-        if FakePosHighlight then 
-            FakePosHighlight.Visible = false 
-            FakePosHighlight.Color3 = Color3.fromRGB(255, 0, 0)
-        end
-        if FakePosLabel then 
-            FakePosLabel.Enabled = false 
-        end
-        if ServerPosPart then ServerPosPart.Transparency = 1 end
-        TargetServerPosition = nil
-        ActualServerPosition = nil
-        Notify("FR HUB", "تم إيقاف الDesync!", 2)
-    end
-end
-
-ToggleBtn.MouseButton1Click:Connect(ToggleDesync)
+local InfoLabel = Instance.new("TextLabel")
+InfoLabel.Size = UDim2.new(0.9, 0, 0, 40)
+InfoLabel.Position = UDim2.new(0.05, 0, 0.52, 0)
+InfoLabel.BackgroundTransparency = 1
+InfoLabel.Text = "الموقع الزائف يتحرك تدريجياً\nللحفاظ على التفاعل مع السيرفر"
+InfoLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
+InfoLabel.TextSize = 10
+InfoLabel.Font = Enum.Font.Gotham
+InfoLabel.TextWrapped = true
+InfoLabel.Parent = MainFrame
 
 local SaveSettingsBtn = Instance.new("TextButton")
 SaveSettingsBtn.Size = UDim2.new(0.9, 0, 0, 30)
-SaveSettingsBtn.Position = UDim2.new(0.05, 0, 0.5, 0)
+SaveSettingsBtn.Position = UDim2.new(0.05, 0, 0.65, 0)
 SaveSettingsBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
 SaveSettingsBtn.Text = "تشغيل Desync تلقائي"
 SaveSettingsBtn.TextColor3 = Color3.fromRGB(200, 200, 200)
 SaveSettingsBtn.TextSize = 14
 SaveSettingsBtn.Font = Enum.Font.GothamBold
 SaveSettingsBtn.Parent = MainFrame
-
-local SaveBtnCorner = Instance.new("UICorner")
-SaveBtnCorner.CornerRadius = UDim.new(0, 8)
-SaveBtnCorner.Parent = SaveSettingsBtn
-
-SaveSettingsBtn.MouseButton1Click:Connect(function()
-    ScriptSettings.AutoDesync = DesyncEnabled
-    SaveSettings()
-    Notify("FR HUB", "تم الحفظ!", 2)
-end)
+Instance.new("UICorner", SaveSettingsBtn).CornerRadius = UDim.new(0, 8)
 
 local Credits = Instance.new("TextLabel")
 Credits.Size = UDim2.new(1, 0, 0, 25)
 Credits.Position = UDim2.new(0, 0, 1, -25)
 Credits.BackgroundTransparency = 1
-Credits.Text = "© FR HUB - DesyncOptimized"
+Credits.Text = "© FR HUB - Smart Desync V11"
 Credits.TextColor3 = Color3.fromRGB(100, 100, 100)
 Credits.TextSize = 12
 Credits.Font = Enum.Font.Gotham
 Credits.Parent = MainFrame
 
+-- زر التصغير
 local MinimizeBtn = Instance.new("TextButton")
 MinimizeBtn.Name = "MinimizeBtn"
 MinimizeBtn.Size = UDim2.new(0, 30, 0, 30)
@@ -539,7 +299,8 @@ MinimizeBtn.TextSize = 24
 MinimizeBtn.Font = Enum.Font.GothamBold
 MinimizeBtn.Parent = Header
 
-local UIElements = {ToggleBtn, StatusLabel, RealPosLabel, SaveSettingsBtn, Credits}
+local UIElements = {ToggleBtn, SpeedNormalBtn, SpeedStealBtn, StatusLabel, 
+                   DistanceLabel, InfoLabel, SaveSettingsBtn, Credits}
 
 MinimizeBtn.MouseButton1Click:Connect(function()
     ScriptSettings.Minimized = not ScriptSettings.Minimized
@@ -555,7 +316,7 @@ MinimizeBtn.MouseButton1Click:Connect(function()
     else
         MinimizeBtn.Text = "-"
         TweenService:Create(MainFrame, TweenInfo.new(0.3), {
-            Size = UDim2.new(0, 260, 0, 300)
+            Size = UDim2.new(0, 260, 0, 320)
         }):Play()
         for _, element in ipairs(UIElements) do
             element.Visible = true
@@ -563,10 +324,172 @@ MinimizeBtn.MouseButton1Click:Connect(function()
     end
 end)
 
+-- تغيير السرعة
+SpeedNormalBtn.MouseButton1Click:Connect(function()
+    IsStealing = false
+    Notify("FR HUB", "السرعة العادية: " .. NORMAL_SPEED, 2)
+end)
+
+SpeedStealBtn.MouseButton1Click:Connect(function()
+    IsStealing = true
+    Notify("FR HUB", "سرعة السرقة: " .. STEAL_SPEED, 2)
+end)
+
+SaveSettingsBtn.MouseButton1Click:Connect(function()
+    ScriptSettings.AutoDesync = DesyncEnabled
+    SaveSettings()
+    Notify("FR HUB", "تم الحفظ!", 2)
+end)
+
+-- الدالة الرئيسية للـ Desync الذكي
+local function UpdateDesync()
+    local char = LocalPlayer.Character
+    if not char then return end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not humanoid then return end
+    
+    local realPos = hrp.Position
+    local currentSpeed = IsStealing and STEAL_SPEED or NORMAL_SPEED
+    
+    -- === المنطق الذكي للموقع الزائف ===
+    
+    -- 1. إذا كان الموقع الزائف فارغ، ابدأ من الموقع الحقيقي
+    if not FakePosition then
+        FakePosition = realPos
+    end
+    
+    -- 2. احسب المسافة بين الموقع الحقيقي والزائف
+    local distance = (realPos - FakePosition).Magnitude
+    
+    -- 3. إذا تجاوزت المسافة UPDATE_DISTANCE، حرك الموقع الزائف تدريجياً
+    if distance > UPDATE_DISTANCE then
+        -- اتجاه الحركة من الموقع الزائف نحو الحقيقي
+        local direction = (realPos - FakePosition).Unit
+        -- حرك الموقع الزائف باتجاه الحقيقي بسرعة INTERPOLATION_SPEED
+        FakePosition = FakePosition + (direction * INTERPOLATION_SPEED * 0.1)
+        
+        -- تأكد إنه ما زال أبعد من UPDATE_DISTANCE شوي
+        if (realPos - FakePosition).Magnitude < UPDATE_DISTANCE - 2 then
+            FakePosition = realPos - (direction * (UPDATE_DISTANCE - 2))
+        end
+    else
+        -- 4. إذا المسافة مناسبة، حافظ على الموقع الزائف ثابت نسبياً
+        -- (لا تتحرك مع اللاعب، خليه ثابت عشان الـ Desync يشتغل)
+        
+        -- بس حركه شوي عشان ما يكون ثابت تماماً (يخلي السيرفر يشك أقل)
+        local randomOffset = Vector3.new(
+            math.sin(tick() * 0.5) * 0.1,
+            0,
+            math.cos(tick() * 0.5) * 0.1
+        )
+        FakePosition = FakePosition + randomOffset
+    end
+    
+    -- 5. إرسال الموقع الزائف للسيرفر (بمعدل محدود)
+    local now = tick()
+    if now - LastUpdateTime >= UpdateInterval then
+        LastUpdateTime = now
+        SendPosition(FakePosition)
+    end
+    
+    -- 6. تطبيق السرعة على اللاعب
+    humanoid.WalkSpeed = currentSpeed > 32 and 32 or currentSpeed
+    
+    -- إذا السرعة أعلى من 32، استخدم AssemblyLinearVelocity
+    if currentSpeed > 32 and humanoid.MoveDirection.Magnitude > 0.1 then
+        local velocity = hrp.AssemblyLinearVelocity
+        local targetVel = humanoid.MoveDirection * currentSpeed
+        hrp.AssemblyLinearVelocity = Vector3.new(
+            velocity.X + (targetVel.X - velocity.X) * 0.15,
+            velocity.Y,
+            velocity.Z + (targetVel.Z - velocity.Z) * 0.15
+        )
+    end
+    
+    -- 7. تحديث الواجهة
+    if tick() % 0.3 < 0.05 then
+        ServerPosition = GetServerPosition()
+        local distText = math.floor(distance)
+        local serverDist = ServerPosition and math.floor((ServerPosition - FakePosition).Magnitude) or 0
+        
+        DistanceLabel.Text = "المسافة: " .. distText .. "m | سيرفر: " .. serverDist .. "m"
+        
+        if ServerPosition and serverDist < 8 then
+            StatusLabel.Text = "متزامن (" .. serverDist .. "m)"
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        else
+            StatusLabel.Text = "Desync نشط (" .. distText .. "m)"
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+        end
+    end
+end
+
+-- تفعيل/إيقاف Desync
+local function ToggleDesync()
+    DesyncEnabled = not DesyncEnabled
+    
+    if DesyncEnabled then
+        -- تهيئة الموقع الزائف
+        local char = LocalPlayer.Character
+        if char then
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                FakePosition = hrp.Position
+            end
+        end
+        
+        SetDesync(true)
+        FastRespawn()
+        
+        -- بدء الـ Loop
+        Connection_RenderStepped = RunService.Heartbeat:Connect(UpdateDesync)
+        
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.3), {
+            BackgroundColor3 = Color3.fromRGB(0, 170, 127), 
+            TextColor3 = Color3.fromRGB(255, 255, 255)
+        }):Play()
+        ToggleBtn.Text = "Desync: مفعل"
+        
+        Notify("FR HUB", "Desync V11 نشط! الموقع يتحرك ذكياً", 3)
+    else
+        -- إيقاف
+        if Connection_RenderStepped then
+            Connection_RenderStepped:Disconnect()
+            Connection_RenderStepped = nil
+        end
+        
+        SetDesync(false)
+        FakePosition = nil
+        
+        -- إعادة السرعة الطبيعية
+        local char = LocalPlayer.Character
+        if char then
+            local humanoid = char:FindFirstChildOfClass("Humanoid")
+            if humanoid then humanoid.WalkSpeed = 16 end
+        end
+        
+        TweenService:Create(ToggleBtn, TweenInfo.new(0.3), {
+            BackgroundColor3 = Color3.fromRGB(45, 45, 45), 
+            TextColor3 = Color3.fromRGB(200, 200, 200)
+        }):Play()
+        ToggleBtn.Text = "تفعيل Desync"
+        StatusLabel.Text = "الحالة: متوقف"
+        StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        DistanceLabel.Text = "المسافة: 0m | تجديد عند: " .. UPDATE_DISTANCE .. "m"
+        
+        Notify("FR HUB", "تم إيقاف Desync", 2)
+    end
+end
+
+ToggleBtn.MouseButton1Click:Connect(ToggleDesync)
+
+-- تشغيل تلقائي
 task.delay(1, function()
     if ScriptSettings.AutoDesync and not DesyncEnabled then
         ToggleDesync()
     end
 end)
 
-Notify("FR HUB", "تم التحميل بنجاح! (محسّن - بدون لاق)", 4)
+Notify("FR HUB", "Desync V11 محمل! (ذكي + سريع)", 4)
